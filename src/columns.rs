@@ -22,15 +22,15 @@ pub(crate) const fn reg_preimage(x: usize, y: usize) -> usize {
     START_PREIMAGE + (x * 5 + y)
 }
 
-const START_A: usize = START_PREIMAGE + 5 * 5 * 2;
+const START_A: usize = START_PREIMAGE + 5 * 5;
 pub(crate) const fn reg_a(x: usize, y: usize) -> usize {
     debug_assert!(x < 5);
     debug_assert!(y < 5);
-    START_A + (x * 5 + y) * 2
+    START_A + (x * 5 + y)
 }
 
 // C[x] = xor(A[x, 0], A[x, 1], A[x, 2], A[x, 3], A[x, 4])
-const START_C: usize = START_A + 5 * 5 * 2;
+const START_C: usize = START_A + 5 * 5;
 pub(crate) const fn reg_c(x: usize, z: usize) -> usize {
     debug_assert!(x < 5);
     debug_assert!(z < 64);
