@@ -3,7 +3,7 @@ mod columns;
 use halo2_proofs::{arithmetic::Field, circuit::*, plonk::*, poly::Rotation};
 use std::marker::PhantomData;
 
-use columns::reg_step;
+use columns::{reg_preimage, reg_step};
 // use columns::{NUM_COLUMNS};
 
 /// Number of rounds in a Keccak permutation.
@@ -12,13 +12,14 @@ pub(crate) const NUM_ROUNDS: usize = 24;
 /// Number of 64-bit elements in the Keccak permutation input.
 pub(crate) const NUM_INPUTS: usize = 25;
 
-const NUM_COLUMNS: usize = NUM_ROUNDS;
+const NUM_COLUMNS: usize = 49;
 
 #[derive(Debug, Clone)]
 struct KeccakConfig {
     pub cols: [Column<Advice>; NUM_COLUMNS],
     pub selector: Selector,
     pub instance: Column<Instance>,
+    pub constant: Column<Fixed>,
 }
 
 #[derive(Debug, Clone)]
@@ -38,7 +39,10 @@ impl<F: Field> KeccakChip<F> {
     pub fn configure(meta: &mut ConstraintSystem<F>) -> KeccakConfig {
         let selector = meta.selector();
         let instance = meta.instance_column();
+        let constant = meta.fixed_column();
+
         meta.enable_equality(instance);
+        meta.enable_constant(constant);
 
         let cols: [Column<Advice>; NUM_COLUMNS] = (0..NUM_COLUMNS)
             .map(|_| meta.advice_column())
@@ -59,10 +63,26 @@ impl<F: Field> KeccakChip<F> {
             });
         }
 
+        // Preimages
+        for x in 0..5 {
+            for y in 0..5 {
+                meta.enable_equality(cols[reg_preimage(x, y)]);
+
+                meta.create_gate("preimage", |meta| {
+                    let s = meta.query_selector(selector);
+                    let preimage = reg_preimage(x, y);
+                    let diff = meta.query_advice(cols[preimage], Rotation::cur())
+                        - meta.query_advice(cols[preimage], Rotation::next());
+                    vec![s * diff]
+                });
+            }
+        }
+
         KeccakConfig {
             cols,
             selector,
             instance,
+            constant,
         }
     }
 
@@ -70,41 +90,66 @@ impl<F: Field> KeccakChip<F> {
         layouter.assign_region(
             || "keccak table",
             |mut region| {
+                let mut preimage_cells = Vec::with_capacity(5 * 5);
+                // Populate the preimage for first row.
+                for x in 0..5 {
+                    for y in 0..5 {
+                        let preimage = reg_preimage(x, y);
+                        preimage_cells.push(region.assign_advice_from_instance(
+                            || "preimage",
+                            self.config.instance,
+                            y * 5 + x,
+                            self.config.cols[preimage],
+                            0,
+                        )?);
+                    }
+                }
+
                 // Assign first row
                 let mut cells = Vec::with_capacity(NUM_ROUNDS);
 
-                cells.push(region.assign_advice_from_instance(
+                cells.push(region.assign_advice_from_constant(
                     || "1",
-                    self.config.instance,
+                    self.config.cols[reg_step(0)],
                     0,
-                    self.config.cols[0],
-                    0
+                    F::ONE,
                 )?);
 
                 for col in 1..NUM_ROUNDS {
-                    cells.push(region.assign_advice_from_instance(
+                    cells.push(region.assign_advice_from_constant(
                         || "0",
-                        self.config.instance,
-                        1,
                         self.config.cols[reg_step(col)],
-                        0
+                        0,
+                        F::ZERO,
                     )?);
                 }
 
                 // Assign remaining rows
-                for row in 0..NUM_ROUNDS-1 {
-                    self.config.selector.enable(&mut region, row)?;
+                for round in 0..NUM_ROUNDS - 1 {
+                    self.config.selector.enable(&mut region, round)?;
 
                     let mut new_cells = Vec::with_capacity(NUM_ROUNDS);
                     for col in 0..NUM_ROUNDS {
                         new_cells.push(region.assign_advice(
                             || "advice",
                             self.config.cols[reg_step(col)],
-                            row + 1,
+                            round + 1,
                             || cells[(col + NUM_ROUNDS - 1) % NUM_ROUNDS].value().copied(),
                         )?);
                     }
                     cells = new_cells;
+
+                    for x in 0..5 {
+                        for y in 0..5 {
+                            let preimage = reg_preimage(x, y);
+                            region.assign_advice(
+                                || "preimage",
+                                self.config.cols[preimage],
+                                round + 1,
+                                || preimage_cells[x * 5 + y].value().copied(),
+                            )?;
+                        }
+                    }
                 }
 
                 Ok(cells[NUM_ROUNDS - 1].clone())
@@ -146,7 +191,7 @@ impl<F: Field> Circuit<F> for KeccakCircuit<F> {
 
         let out_cell = chip.assign(layouter.namespace(|| "table"))?;
 
-        chip.expose_public(layouter.namespace(|| "out"), &out_cell, 0)?;
+        // chip.expose_public(layouter.namespace(|| "out"), &out_cell, NUM_INPUTS + 1)?;
 
         Ok(())
     }
@@ -154,25 +199,25 @@ impl<F: Field> Circuit<F> for KeccakCircuit<F> {
 
 #[cfg(test)]
 mod tests {
-    use std::marker::PhantomData;
+    use super::*;
 
-    use super::KeccakCircuit;
     use halo2_proofs::dev::MockProver;
     use halo2curves::pasta::Fp;
+    use std::marker::PhantomData;
 
     #[test]
     fn keccak_example1() {
-        let k = 5;
+        let k = 6;
 
         // let a = Fp::from(1); // F[0]
         // let out = Fp::from(55); // F[9]
 
         let circuit = KeccakCircuit(PhantomData);
 
-        let public_input = vec![Fp::from(1), Fp::from(0), Fp::from(1)];
-        
-        println!("k: {:?}", k);
-        println!("public_input: {:?}", public_input);
+        let input: [u64; NUM_INPUTS] = rand::random();
+        let public_input = input.map(|x| Fp::from(x)).to_vec();
+
+        // println!("public_input: {:?}", public_input);
 
         let prover = MockProver::run(k, &circuit, vec![public_input.clone()]).unwrap();
         prover.assert_satisfied();
