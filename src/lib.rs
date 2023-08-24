@@ -589,13 +589,34 @@ impl<F: PrimeFieldBits> Circuit<F> for KeccakCircuit<F> {
 mod tests {
     use super::*;
 
-    use halo2_proofs::dev::MockProver;
-    use halo2curves::pasta::Fp;
     use std::marker::PhantomData;
     use tiny_keccak::keccakf;
 
+    use ark_std::{end_timer, start_timer};
+    use halo2_proofs::{
+        dev::MockProver,
+        halo2curves::{
+            bn256::{Bn256, G1Affine},
+            pasta::Fp,
+            CurveAffine,
+        },
+        poly::{
+            commitment::{Params, ParamsProver},
+            kzg::{
+                commitment::{KZGCommitmentScheme, ParamsKZG},
+                multiopen::{ProverSHPLONK, VerifierSHPLONK},
+                strategy::SingleStrategy,
+            },
+        },
+        transcript::{
+            Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
+        },
+    };
+    use rand_core::OsRng;
+    use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
+
     #[test]
-    fn keccak_example1() {
+    fn test_keccak_correctness() {
         let k = 6;
 
         let circuit = KeccakCircuit(PhantomData);
@@ -617,11 +638,81 @@ mod tests {
 
         let prover = MockProver::run(k, &circuit, public_inputs.clone()).unwrap();
         prover.assert_satisfied();
+    }
 
-        // public_input[2] += Fp::one();
-        // let _prover = MockProver::run(k, &circuit, vec![public_input]).unwrap();
-        // uncomment the following line and the assert will fail
-        // _prover.assert_satisfied();
+    #[test]
+    fn test_keccak_proof() {
+        let k = 6;
+
+        let circuit = KeccakCircuit(PhantomData);
+
+        // let input: [u64; NUM_INPUTS] = rand::random();
+        let input = [0u64; NUM_INPUTS];
+
+        let expected = {
+            let mut state = input;
+            keccakf(&mut state);
+            state
+        };
+
+        let public_inputs = vec![
+            input.map(|x| Fp::from(x)).to_vec(),
+            expected.map(|x| Fp::from(x)).to_vec(),
+        ];
+
+        // Generate proof
+        let srs_params = ParamsKZG::<Bn256>::setup(k, ChaCha20Rng::from_seed(Default::default()));
+        let mut rng = OsRng;
+
+        let vk_time = start_timer!(|| "Generating vkey");
+        let vk = keygen_vk(&srs_params, &circuit).unwrap();
+        end_timer!(vk_time);
+
+        let pk_time = start_timer!(|| "Generating pkey");
+        let pk = keygen_pk(&srs_params, vk, &circuit).unwrap();
+        end_timer!(pk_time);
+
+        let proof_time = start_timer!(|| "Proving time");
+        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+        create_proof::<
+            KZGCommitmentScheme<Bn256>,
+            ProverSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            _,
+            Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
+            _,
+        >(
+            &srs_params,
+            &pk,
+            &[circuit],
+            &[&[]],
+            &mut rng,
+            &mut transcript,
+        )
+        .unwrap();
+        let proof = transcript.finalize();
+        end_timer!(proof_time);
+
+        let proof_size = proof.len();
+
+        let verify_time = start_timer!(|| "Verify time");
+        let verifier_params = srs_params.verifier_params();
+        let strategy = SingleStrategy::new(&srs_params);
+        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
+        verify_proof::<
+            KZGCommitmentScheme<Bn256>,
+            VerifierSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
+            SingleStrategy<'_, Bn256>,
+        >(
+            verifier_params,
+            pk.get_vk(),
+            strategy,
+            &[&[]],
+            &mut transcript,
+        )
+        .unwrap();
     }
 
     #[cfg(feature = "dev-graph")]
