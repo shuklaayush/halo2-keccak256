@@ -5,25 +5,29 @@ use ff::{PrimeField, PrimeFieldBits};
 use halo2_proofs::{arithmetic::Field, circuit::*, plonk::*, poly::Rotation};
 use std::marker::PhantomData;
 
-use columns::{reg_a, reg_c, reg_c_prime, reg_preimage, reg_step};
+use columns::{reg_a, reg_a_prime, reg_c, reg_c_prime, reg_preimage, reg_step};
 use logic::{xor, xor3_gen};
 // use columns::{NUM_COLUMNS};
 
 /// Number of rounds in a Keccak permutation.
-pub(crate) const NUM_ROUNDS: usize = 24;
-// pub(crate) const NUM_ROUNDS: usize = 2;
+// pub(crate) const NUM_ROUNDS: usize = 24;
+pub(crate) const NUM_ROUNDS: usize = 2;
 
 /// Number of 64-bit elements in the Keccak permutation input.
 pub(crate) const NUM_INPUTS: usize = 25;
 
-const NUM_COLUMNS: usize = 714;
+const NUM_COLUMNS: usize = 2292;
 
 #[derive(Debug, Clone)]
 struct KeccakConfig {
     pub cols: [Column<Advice>; NUM_COLUMNS],
+    // TODO: There's redundancy here, but it's not clear how to remove it.
+    //       halo2 selector type is very restrictive.
+    pub selector: Selector,
     pub selector_first: Selector,
     pub selector_last: Selector,
     pub selector_not_last: Selector,
+
     pub instance: Column<Instance>,
     // pub constant: Column<Fixed>,
 }
@@ -50,6 +54,7 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
     pub fn configure(meta: &mut ConstraintSystem<F>) -> KeccakConfig {
         // Create columns
 
+        let selector = meta.selector();
         let selector_first = meta.selector();
         let selector_last = meta.selector();
         let selector_not_last = meta.selector();
@@ -110,25 +115,51 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
         for x in 0..5 {
             for z in 0..64 {
                 meta.create_gate("c_prime", |meta| {
-                    let s_not_last = meta.query_selector(selector_not_last);
+                    let s = meta.query_selector(selector);
                     let xor = xor3_gen(
                         meta.query_advice(cols[reg_c(x, z)], Rotation::cur()),
                         meta.query_advice(cols[reg_c((x + 4) % 5, z)], Rotation::cur()),
                         meta.query_advice(cols[reg_c((x + 1) % 5, (z + 63) % 64)], Rotation::cur()),
                     );
                     let c_prime = meta.query_advice(cols[reg_c_prime(x, z)], Rotation::cur());
-                    vec![s_not_last * (c_prime - xor)]
+                    vec![s * (c_prime - xor)]
+                });
+            }
+        }
+
+        // Check that the input limbs are consistent with A' and D.
+        // A[x, y, z] = xor(A'[x, y, z], D[x, y, z])
+        //            = xor(A'[x, y, z], C[x - 1, z], C[x + 1, z - 1])
+        //            = xor(A'[x, y, z], C[x, z], C'[x, z]).
+        // The last step is valid based on the identity we checked above.
+        // It isn't required, but makes this check a bit cleaner.
+        for x in 0..5 {
+            for y in 0..5 {
+                meta.create_gate("a", |meta| {
+                    let s = meta.query_selector(selector);
+                    let a = meta.query_advice(cols[reg_a(x, y)], Rotation::cur());
+                    let mut get_bit = |z| {
+                        let a_prime =
+                            meta.query_advice(cols[reg_a_prime(x, y, z)], Rotation::cur());
+                        let c = meta.query_advice(cols[reg_c(x, z)], Rotation::cur());
+                        let c_prime = meta.query_advice(cols[reg_c_prime(x, z)], Rotation::cur());
+                        xor3_gen(a_prime, c, c_prime)
+                    };
+                    let computed = (0..64).rev().fold(Expression::Constant(F::ZERO), |acc, z| {
+                        Expression::Constant(F::from(2)) * acc + get_bit(z)
+                    });
+                    vec![s * (a - computed)]
                 });
             }
         }
 
         // Copying A'' to A for next round
+        // TODO: Replace with actual columns
         for x in 0..5 {
             for y in 0..5 {
                 // To initialize the first A, we need to set it to the input
                 meta.enable_equality(cols[reg_a(x, y)]);
 
-                // TODO: Change cur column to A''
                 meta.create_gate("a", |meta| {
                     let s_not_last = meta.query_selector(selector_not_last);
                     let a = reg_a(x, y);
@@ -141,6 +172,7 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
 
         KeccakConfig {
             cols,
+            selector,
             selector_first,
             selector_last,
             selector_not_last,
@@ -198,6 +230,8 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
 
                 // Assign remaining rows
                 for round in 0..NUM_ROUNDS {
+                    self.config.selector.enable(&mut region, round)?;
+
                     if round < NUM_ROUNDS - 1 {
                         // Enable selector
                         self.config.selector_not_last.enable(&mut region, round)?;
@@ -283,8 +317,27 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                             row[reg_c_prime(x, z)] = xor;
                         }
                     }
-                }
 
+                    // Populate A'. To avoid shifting indices, we rewrite
+                    //     A'[x, y, z] = xor(A[x, y, z], C[x - 1, z], C[x + 1, z - 1])
+                    // as
+                    //     A'[x, y, z] = xor(A[x, y, z], C[x, z], C'[x, z]).
+                    for x in 0..5 {
+                        for y in 0..5 {
+                            for z in 0..64 {
+                                let a_bit = F::from(row[reg_a(x, y)].to_le_bits()[z] as u64);
+                                let xor = xor(&[a_bit, row[reg_c(x, z)], row[reg_c_prime(x, z)]]);
+                                region.assign_advice(
+                                    || "a_prime",
+                                    self.config.cols[reg_a_prime(x, y, z)],
+                                    round,
+                                    || Value::known(xor),
+                                )?;
+                                row[reg_a_prime(x, y, z)] = xor;
+                            }
+                        }
+                    }
+                }
                 Ok(())
             },
         )
