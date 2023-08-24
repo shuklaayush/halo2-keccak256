@@ -377,7 +377,7 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                     for x in 0..5 {
                         for y in 0..5 {
                             let preimage = reg_preimage(x, y);
-                            let cell = region.assign_advice(
+                            region.assign_advice(
                                 || "preimage",
                                 self.config.cols[preimage],
                                 0,
