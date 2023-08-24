@@ -2,9 +2,9 @@ mod columns;
 mod constants;
 mod logic;
 
-use ff::{PrimeField, PrimeFieldBits};
-use halo2_proofs::{arithmetic::Field, circuit::*, plonk::*, poly::Rotation};
-use std::{f32::consts::E, marker::PhantomData};
+use ff::PrimeFieldBits;
+use halo2_proofs::{circuit::*, plonk::*, poly::Rotation};
+use std::marker::PhantomData;
 
 use columns::{
     reg_a, reg_a_prime, reg_a_prime_prime, reg_a_prime_prime_0_0_bit, reg_a_prime_prime_prime,
@@ -16,7 +16,7 @@ use logic::{andn, andn_gen, xor, xor3_gen, xor_gen};
 
 /// Number of rounds in a Keccak permutation.
 // pub(crate) const NUM_ROUNDS: usize = 24;
-pub(crate) const NUM_ROUNDS: usize = 2;
+pub(crate) const NUM_ROUNDS: usize = 24;
 
 /// Number of 64-bit elements in the Keccak permutation input.
 pub(crate) const NUM_INPUTS: usize = 25;
@@ -233,31 +233,31 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
 
         // A'''[0, 0] = A''[0, 0] XOR RC
         // TODO: Maybe use fixed column for RC
-        // meta.create_gate("a_prime_prime_prime_0_0", |meta| {
-        //     let s = meta.query_selector(selector);
+        meta.create_gate("a_prime_prime_prime_0_0", |meta| {
+            let s = meta.query_selector(selector);
 
-        //     let a_prime_prime_prime_0_0 =
-        //         meta.query_advice(cols[reg_a_prime_prime_prime(0, 0)], Rotation::cur());
-        //     let mut get_xored_bit = |i| {
-        //         let rc_bit_i = (0..NUM_ROUNDS).fold(Expression::Constant(F::ZERO), |acc, r| {
-        //             let this_round = meta.query_advice(cols[reg_step(r)], Rotation::cur());
-        //             let this_round_constant =
-        //                 Expression::Constant(F::from(rc_value_bit(r, i) as u64));
-        //             acc + this_round * this_round_constant
-        //         });
+            let a_prime_prime_prime_0_0 =
+                meta.query_advice(cols[reg_a_prime_prime_prime(0, 0)], Rotation::cur());
+            let mut get_xored_bit = |i| {
+                let rc_bit_i = (0..NUM_ROUNDS).fold(Expression::Constant(F::ZERO), |acc, r| {
+                    let this_round = meta.query_advice(cols[reg_step(r)], Rotation::cur());
+                    let this_round_constant =
+                        Expression::Constant(F::from(rc_value_bit(r, i) as u64));
+                    acc + this_round * this_round_constant
+                });
 
-        //         xor_gen(
-        //             meta.query_advice(cols[reg_a_prime_prime_0_0_bit(i)], Rotation::cur()),
-        //             Expression::Constant(if i == 0 { F::ONE } else { F::ZERO }),
-        //         )
-        //     };
+                xor_gen(
+                    meta.query_advice(cols[reg_a_prime_prime_0_0_bit(i)], Rotation::cur()),
+                    rc_bit_i,
+                )
+            };
 
-        //     let computed = (0..64).rev().fold(Expression::Constant(F::ZERO), |acc, z| {
-        //         Expression::Constant(F::from(2)) * acc + get_xored_bit(z)
-        //     });
+            let computed = (0..64).rev().fold(Expression::Constant(F::ZERO), |acc, z| {
+                Expression::Constant(F::from(2)) * acc + get_xored_bit(z)
+            });
 
-        //     vec![s * (a_prime_prime_prime_0_0 - computed)]
-        // });
+            vec![s * (a_prime_prime_prime_0_0 - computed)]
+        });
 
         // Copying A'' to A for next round
         for x in 0..5 {
@@ -302,9 +302,28 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
     }
 
     pub fn assign(&self, mut layouter: impl Layouter<F>) -> Result<(), Error> {
+        let field_to_u64 = |x: F| {
+            x.to_le_bits()
+                .iter()
+                .rev()
+                .fold(0u64, |acc, b| (acc << 1) + (*b as u64))
+        };
+
+        let print_row = |caption, row: &[F]| {
+            println!("{:}", caption);
+            for y in 0..5 {
+                for x in 0..5 {
+                    let idx = reg_a_prime_prime_prime(x, y);
+                    print!("{:016x} ", field_to_u64(row[idx]));
+                }
+                println!();
+            }
+        };
+
         layouter.assign_region(
             || "keccak table",
             |mut region| {
+
                 // Store values in local row
                 let mut row: [F; NUM_COLUMNS] = [F::ZERO; NUM_COLUMNS];
 
@@ -350,6 +369,10 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
 
                 // Assign remaining rows
                 for round in 0..NUM_ROUNDS {
+                    println!("------------------------------------------------------------------------------------");
+                    println!("Round: {}", round);
+                    println!("------------------------------------------------------------------------------------");
+
                     self.config.selector.enable(&mut region, round)?;
 
                     if round < NUM_ROUNDS - 1 {
@@ -504,6 +527,7 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                     let val = F::from(
                         a_prime_prime_0_0_bits
                             .iter()
+                            .rev()
                             .fold(0u64, |acc, b| (acc << 1) + (*b as u64))
                             ^ rc_value(round),
                     );
@@ -514,6 +538,9 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                         || Value::known(val),
                     )?;
                     row[reg_a_prime_prime_prime(0, 0)] = val;
+
+                    print_row("After theta:", &row);
+                    println!("------------------------------------------------------------------------------------");
                 }
 
                 Ok(())
@@ -544,9 +571,7 @@ impl<F: PrimeFieldBits> Circuit<F> for KeccakCircuit<F> {
     ) -> Result<(), Error> {
         let chip = KeccakChip::construct(config);
 
-        let out_cell = chip.assign(layouter.namespace(|| "table"))?;
-
-        // chip.expose_public(layouter.namespace(|| "out"), &out_cell, NUM_INPUTS + 1)?;
+        chip.assign(layouter.namespace(|| "table"))?;
 
         Ok(())
     }
@@ -564,9 +589,6 @@ mod tests {
     #[test]
     fn keccak_example1() {
         let k = 6;
-
-        // let a = Fp::from(1); // F[0]
-        // let out = Fp::from(55); // F[9]
 
         let circuit = KeccakCircuit(PhantomData);
 
