@@ -1,9 +1,22 @@
-use crate::NUM_ROUNDS;
+use crate::{NUM_INPUTS, NUM_ROUNDS};
 
 /// A register which is set to 1 if we are in the `i`th round, otherwise 0.
 pub const fn reg_step(i: usize) -> usize {
     debug_assert!(i < NUM_ROUNDS);
     i
+}
+
+/// Registers to hold permutation outputs.
+/// `reg_output(i) -> output[i]`
+pub const fn reg_output(i: usize) -> usize {
+    debug_assert!(i < NUM_INPUTS);
+    let i_u64 = i; // The index of the 64-bit chunk.
+
+    // The 5x5 state is treated as y-major, as per the Keccak spec.
+    let y = i_u64 / 5;
+    let x = i_u64 % 5;
+
+    reg_a_prime_prime_prime(x, y)
 }
 
 const R: [[u8; 5]; 5] = [

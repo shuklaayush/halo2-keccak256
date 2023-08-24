@@ -8,7 +8,7 @@ use std::{f32::consts::E, marker::PhantomData};
 
 use columns::{
     reg_a, reg_a_prime, reg_a_prime_prime, reg_a_prime_prime_0_0_bit, reg_a_prime_prime_prime,
-    reg_b, reg_c, reg_c_prime, reg_preimage, reg_step, NUM_COLUMNS,
+    reg_b, reg_c, reg_c_prime, reg_output, reg_preimage, reg_step, NUM_COLUMNS,
 };
 use constants::{rc_value, rc_value_bit};
 use logic::{andn, andn_gen, xor, xor3_gen, xor_gen};
@@ -33,7 +33,8 @@ struct KeccakConfig {
     pub selector_last: Selector,
     pub selector_not_last: Selector,
 
-    pub instance: Column<Instance>,
+    pub instance_input: Column<Instance>,
+    pub instance_output: Column<Instance>,
     // pub constant: Column<Fixed>,
 }
 
@@ -64,10 +65,11 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
         let selector_last = meta.selector();
         let selector_not_last = meta.selector();
 
-        let instance = meta.instance_column();
+        let instance_input = meta.instance_column();
+        let instance_output = meta.instance_column();
         // let constant = meta.fixed_column();
 
-        meta.enable_equality(instance);
+        meta.enable_equality(instance_input);
         // meta.enable_constant(constant);
 
         let cols: [Column<Advice>; NUM_COLUMNS] = (0..NUM_COLUMNS)
@@ -253,7 +255,7 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
         //     let computed = (0..64).rev().fold(Expression::Constant(F::ZERO), |acc, z| {
         //         Expression::Constant(F::from(2)) * acc + get_xored_bit(z)
         //     });
-            
+
         //     vec![s * (a_prime_prime_prime_0_0 - computed)]
         // });
 
@@ -265,8 +267,9 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
 
                 meta.create_gate("a", |meta| {
                     let s_not_last = meta.query_selector(selector_not_last);
-                    
-                    let output = meta.query_advice(cols[reg_a_prime_prime_prime(x, y)], Rotation::cur());
+
+                    let output =
+                        meta.query_advice(cols[reg_a_prime_prime_prime(x, y)], Rotation::cur());
                     let input = meta.query_advice(cols[reg_a(x, y)], Rotation::next());
 
                     vec![s_not_last * (output - input)]
@@ -274,13 +277,26 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
             }
         }
 
+        // Constrain output
+        // for i in 0..NUM_INPUTS {
+        //     meta.create_gate("output", |meta| {
+        //         let s_last = meta.query_selector(selector_last);
+
+        //         let output = meta.query_advice(cols[reg_output(i)], Rotation::cur());
+        //         let expected = meta.query_instance(instance_output, Rotation::cur());
+
+        //         vec![s_last * (output - expected)]
+        //     });
+        // }
+
         KeccakConfig {
             cols,
             selector,
             selector_first,
             selector_last,
             selector_not_last,
-            instance,
+            instance_input,
+            instance_output,
             // constant,
         }
     }
@@ -304,7 +320,7 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                         let preimage = reg_preimage(x, y);
                         let cell = region.assign_advice_from_instance(
                             || "preimage",
-                            self.config.instance,
+                            self.config.instance_input,
                             y * 5 + x,
                             self.config.cols[preimage],
                             0,
@@ -323,7 +339,7 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                         let a = reg_a(x, y);
                         region.assign_advice_from_instance(
                             || "a",
-                            self.config.instance,
+                            self.config.instance_input,
                             y * 5 + x,
                             self.config.cols[a],
                             0,
@@ -504,15 +520,6 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
             },
         )
     }
-
-    pub fn expose_public(
-        &self,
-        mut layouter: impl Layouter<F>,
-        cell: &AssignedCell<F, F>,
-        row: usize,
-    ) -> Result<(), Error> {
-        layouter.constrain_instance(cell.cell(), self.config.instance, row)
-    }
 }
 
 #[derive(Default)]
@@ -552,6 +559,7 @@ mod tests {
     use halo2_proofs::dev::MockProver;
     use halo2curves::pasta::Fp;
     use std::marker::PhantomData;
+    use tiny_keccak::keccakf;
 
     #[test]
     fn keccak_example1() {
@@ -564,11 +572,20 @@ mod tests {
 
         // let input: [u64; NUM_INPUTS] = rand::random();
         let input = [0u64; NUM_INPUTS];
-        let public_input = input.map(|x| Fp::from(x)).to_vec();
 
+        let expected = {
+            let mut state = input;
+            keccakf(&mut state);
+            state
+        };
+
+        let public_inputs = vec![
+            input.map(|x| Fp::from(x)).to_vec(),
+            expected.map(|x| Fp::from(x)).to_vec(),
+        ];
         // println!("public_input: {:?}", public_input);
 
-        let prover = MockProver::run(k, &circuit, vec![public_input.clone()]).unwrap();
+        let prover = MockProver::run(k, &circuit, public_inputs.clone()).unwrap();
         prover.assert_satisfied();
 
         // public_input[2] += Fp::one();
