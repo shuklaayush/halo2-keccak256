@@ -97,18 +97,13 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
         for x in 0..5 {
             for y in 0..5 {
                 // To initialize the first preimage, we need to set it to the input
-                // meta.create_gate("preimage first", |meta| {
-                //     let s_first = meta.query_selector(selector_first);
+                meta.create_gate("preimage first", |meta| {
+                    let s_first = meta.query_selector(selector_first);
 
-                //     let preimage = reg_preimage(x, y);
-                //     let input = meta.query_advice(cols[preimage], Rotation::cur());
-                //     vec![
-                //         s_first
-                //             * (input
-                //                 - meta
-                //                     .query_instance(instance_input, Rotation((y * 5 + x) as i32))),
-                //     ]
-                // });
+                    let preimage = meta.query_advice(cols[reg_preimage(x, y)], Rotation::cur());
+                    let input = meta.query_instance(instance_input, Rotation((y * 5 + x) as i32));
+                    vec![s_first * (input - preimage)]
+                });
 
                 // Copy remaining preimages
                 meta.create_gate("preimage", |meta| {
@@ -264,18 +259,14 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
         for x in 0..5 {
             for y in 0..5 {
                 // To initialize the first A, we need to set it to the input
-                // meta.create_gate("a first", |meta| {
-                //     let s_first = meta.query_selector(selector_first);
+                meta.create_gate("a first", |meta| {
+                    let s_first = meta.query_selector(selector_first);
 
-                //     let a = reg_a(x, y);
-                //     let input = meta.query_advice(cols[a], Rotation::cur());
-                //     vec![
-                //         s_first
-                //             * (input
-                //                 - meta
-                //                     .query_instance(instance_input, Rotation((y * 5 + x) as i32))),
-                //     ]
-                // });
+                    let a = meta.query_advice(cols[reg_a(x, y)], Rotation::cur());
+                    let input = meta.query_instance(instance_input, Rotation((y * 5 + x) as i32));
+
+                    vec![s_first * (input - a)]
+                });
 
                 // Copying A'' to A for next round
                 meta.create_gate("a", |meta| {
@@ -290,15 +281,16 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
             }
 
             // Output
-            // for i in 0..NUM_INPUTS {
-            //     meta.create_gate("output", |meta| {
-            //         let s_last = meta.query_selector(selector_last);
+            for i in 0..NUM_INPUTS {
+                meta.create_gate("output", |meta| {
+                    let s_first = meta.query_selector(selector_first);
 
-            //         let output = meta.query_advice(cols[reg_output(i)], Rotation::cur());
-            //         let expected = meta.query_instance(instance_output, Rotation(i as i32));
-            //         vec![s_last * (output - expected)]
-            //     });
-            // }
+                    let output =
+                        meta.query_advice(cols[reg_output(i)], Rotation((NUM_ROUNDS - 1) as i32));
+                    let expected = meta.query_instance(instance_output, Rotation(i as i32));
+                    vec![s_first * (output - expected)]
+                });
+            }
         }
 
         KeccakConfig {
