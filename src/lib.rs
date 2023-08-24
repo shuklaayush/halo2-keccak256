@@ -312,15 +312,11 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
         }
     }
 
-    pub fn assign(&self, mut layouter: impl Layouter<F>) -> Result<(), Error> {
-        let inputs = (0..NUM_INPUTS)
-            .map(|i| {
-                layouter
-                    .query_instance(self.config.instance_input, i)
-                    .unwrap()
-            })
-            .collect::<Vec<_>>();
-
+    pub fn assign(
+        &self,
+        mut layouter: impl Layouter<F>,
+        input: [F; NUM_INPUTS],
+    ) -> Result<(), Error> {
         layouter.assign_region(
             || "keccak table",
             |mut region| {
@@ -355,24 +351,6 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                     }
 
                     if round == 0 {
-                        // Populate the preimage for first row.
-                        for x in 0..5 {
-                            for y in 0..5 {
-                                let preimage = reg_preimage(x, y);
-                                let cell = region.assign_advice(
-                                    || "preimage",
-                                    self.config.cols[preimage],
-                                    0,
-                                    || inputs[y * 5 + x],
-                                )?;
-                                let value: PubValue<F> =
-                                    unsafe { std::mem::transmute_copy(&cell.value().copied()) };
-                                if let Some(v) = value.inner {
-                                    row[preimage] = v;
-                                }
-                            }
-                        }
-
                         // Populate A for first row.
                         for x in 0..5 {
                             for y in 0..5 {
@@ -381,25 +359,12 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                                     || "preimage",
                                     self.config.cols[a],
                                     0,
-                                    || inputs[y * 5 + x],
+                                    || Value::known(input[y * 5 + x]),
                                 )?;
-                                row[a] = row[reg_preimage(x, y)];
+                                row[a] = input[y * 5 + x];
                             }
                         }
                     } else {
-                        // Assign preimage
-                        for x in 0..5 {
-                            for y in 0..5 {
-                                let preimage = reg_preimage(x, y);
-                                region.assign_advice(
-                                    || "preimage",
-                                    self.config.cols[preimage],
-                                    round,
-                                    || Value::known(row[preimage]),
-                                )?;
-                            }
-                        }
-
                         // Assign A
                         for x in 0..5 {
                             for y in 0..5 {
@@ -413,6 +378,20 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                                 )?;
                                 row[input] = row[output];
                             }
+                        }
+                    }
+
+                    // Populate the preimage for each row.
+                    for x in 0..5 {
+                        for y in 0..5 {
+                            let preimage = reg_preimage(x, y);
+                            let cell = region.assign_advice(
+                                || "preimage",
+                                self.config.cols[preimage],
+                                0,
+                                || Value::known(input[y * 5 + x]),
+                            )?;
+                            row[preimage] = input[y * 5 + x];
                         }
                     }
 
@@ -541,7 +520,10 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
 }
 
 #[derive(Default)]
-struct KeccakCircuit<F>(PhantomData<F>);
+struct KeccakCircuit<F> {
+    input: [F; NUM_INPUTS],
+    _marker: PhantomData<F>,
+}
 
 impl<F: PrimeFieldBits> Circuit<F> for KeccakCircuit<F> {
     type Config = KeccakConfig;
@@ -562,7 +544,7 @@ impl<F: PrimeFieldBits> Circuit<F> for KeccakCircuit<F> {
     ) -> Result<(), Error> {
         let chip = KeccakChip::construct(config);
 
-        chip.assign(layouter.namespace(|| "table"))?;
+        chip.assign(layouter.namespace(|| "table"), self.input)?;
 
         Ok(())
     }
@@ -572,6 +554,7 @@ impl<F: PrimeFieldBits> Circuit<F> for KeccakCircuit<F> {
 mod tests {
     use super::*;
 
+    use ff::Field;
     use std::marker::PhantomData;
     use tiny_keccak::keccakf;
 
@@ -598,22 +581,21 @@ mod tests {
     fn test_keccak_correctness() {
         let k = 6;
 
-        let circuit = KeccakCircuit(PhantomData);
-
         let input: [u64; NUM_INPUTS] = rand::random();
-        // let input = [0u64; NUM_INPUTS];
-
         let expected = {
             let mut state = input;
             keccakf(&mut state);
             state
+        };
+        let circuit = KeccakCircuit {
+            input: input.map(|x| Fr::from(x)),
+            _marker: PhantomData,
         };
 
         let public_inputs = vec![
             input.map(|x| Fr::from(x)).to_vec(),
             expected.map(|x| Fr::from(x)).to_vec(),
         ];
-        // println!("public_input: {:?}", public_input);
 
         let prover = MockProver::run(k, &circuit, public_inputs).unwrap();
         prover.assert_satisfied();
@@ -623,15 +605,17 @@ mod tests {
     fn test_keccak_proof() {
         let k = 6;
 
-        let circuit = KeccakCircuit(PhantomData);
-
         // let input: [u64; NUM_INPUTS] = rand::random();
         let input = [0u64; NUM_INPUTS];
-
         let expected = {
             let mut state = input;
             keccakf(&mut state);
             state
+        };
+
+        let circuit = KeccakCircuit {
+            input: input.map(|x| Fr::from(x)),
+            _marker: PhantomData,
         };
 
         let public_inputs = vec![
@@ -703,14 +687,18 @@ mod tests {
 
     #[cfg(feature = "dev-graph")]
     #[test]
-    fn plot_keccak1() {
+    fn plot_keccak() {
         use plotters::prelude::*;
 
         let root = BitMapBackend::new("keccak-layout.png", (1024, 3096)).into_drawing_area();
         root.fill(&WHITE).unwrap();
         let root = root.titled("Keccak Layout", ("sans-serif", 60)).unwrap();
 
-        let circuit = KeccakCircuit::<Fr>(PhantomData);
+        let circuit = KeccakCircuit {
+            input: [Fr::ZERO; NUM_INPUTS],
+            _marker: PhantomData,
+        };
+
         halo2_proofs::dev::CircuitLayout::default()
             .render(5, &circuit, &root)
             .unwrap();

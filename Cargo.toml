@@ -18,6 +18,3 @@ rand = "0.8.5"
 rand_chacha = "0.3.1"
 rand_core = "0.6.4"
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
-
-[patch."https://github.com/privacy-scaling-explorations/halo2"]
-halo2_proofs = { git = "https://github.com/shuklaayush/halo2.git", branch = "feat/layouter-query-instance" }
