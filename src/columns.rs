@@ -78,27 +78,26 @@ const START_A_PRIME_PRIME: usize = START_A_PRIME + 5 * 5 * 64;
 pub(crate) const fn reg_a_prime_prime(x: usize, y: usize) -> usize {
     debug_assert!(x < 5);
     debug_assert!(y < 5);
-    START_A_PRIME_PRIME + x * 2 * 5 + y * 2
+    START_A_PRIME_PRIME + x * 5 + y
 }
 
-const START_A_PRIME_PRIME_0_0_BITS: usize = START_A_PRIME_PRIME + 5 * 5 * 2;
+const START_A_PRIME_PRIME_0_0_BITS: usize = START_A_PRIME_PRIME + 5 * 5;
 pub(crate) const fn reg_a_prime_prime_0_0_bit(i: usize) -> usize {
     debug_assert!(i < 64);
     START_A_PRIME_PRIME_0_0_BITS + i
 }
 
-const REG_A_PRIME_PRIME_PRIME_0_0_LO: usize = START_A_PRIME_PRIME_0_0_BITS + 64;
-const REG_A_PRIME_PRIME_PRIME_0_0_HI: usize = REG_A_PRIME_PRIME_PRIME_0_0_LO + 1;
+const REG_A_PRIME_PRIME_PRIME_0_0: usize = START_A_PRIME_PRIME_0_0_BITS + 64;
 
 // A'''[0, 0] is additionally xor'd with RC.
 pub(crate) const fn reg_a_prime_prime_prime(x: usize, y: usize) -> usize {
     debug_assert!(x < 5);
     debug_assert!(y < 5);
     if x == 0 && y == 0 {
-        REG_A_PRIME_PRIME_PRIME_0_0_LO
+        REG_A_PRIME_PRIME_PRIME_0_0
     } else {
         reg_a_prime_prime(x, y)
     }
 }
 
-pub(crate) const NUM_COLUMNS: usize = REG_A_PRIME_PRIME_PRIME_0_0_HI + 1;
+pub(crate) const NUM_COLUMNS: usize = REG_A_PRIME_PRIME_PRIME_0_0 + 1;

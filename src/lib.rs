@@ -1,14 +1,16 @@
 mod columns;
+mod constants;
 mod logic;
 
 use ff::{PrimeField, PrimeFieldBits};
 use halo2_proofs::{arithmetic::Field, circuit::*, plonk::*, poly::Rotation};
-use std::marker::PhantomData;
+use std::{f32::consts::E, marker::PhantomData};
 
 use columns::{
-    reg_a, reg_a_prime, reg_a_prime_prime, reg_a_prime_prime_0_0_bit, reg_b, reg_c, reg_c_prime,
-    reg_preimage, reg_step,
+    reg_a, reg_a_prime, reg_a_prime_prime, reg_a_prime_prime_0_0_bit, reg_a_prime_prime_prime,
+    reg_b, reg_c, reg_c_prime, reg_preimage, reg_step, NUM_COLUMNS,
 };
+use constants::{rc_value, rc_value_bit};
 use logic::{andn, andn_gen, xor, xor3_gen, xor_gen};
 // use columns::{NUM_COLUMNS};
 
@@ -19,7 +21,7 @@ pub(crate) const NUM_ROUNDS: usize = 2;
 /// Number of 64-bit elements in the Keccak permutation input.
 pub(crate) const NUM_INPUTS: usize = 25;
 
-const NUM_COLUMNS: usize = 2406;
+// const NUM_COLUMNS: usize = 2406;
 
 #[derive(Debug, Clone)]
 struct KeccakConfig {
@@ -211,7 +213,7 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
             }
         }
 
-        // A'''[0, 0] = A''[0, 0] XOR RC
+        // A'''[0, 0] = A''[0, 0] as bits
         meta.create_gate("a_prime_prime_0_0", |meta| {
             let s = meta.query_selector(selector);
 
@@ -227,8 +229,35 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
             vec![s * (a_prime_prime_0_0 - computed)]
         });
 
+        // A'''[0, 0] = A''[0, 0] XOR RC
+        // TODO: Maybe use fixed column for RC
+        // meta.create_gate("a_prime_prime_prime_0_0", |meta| {
+        //     let s = meta.query_selector(selector);
+
+        //     let a_prime_prime_prime_0_0 =
+        //         meta.query_advice(cols[reg_a_prime_prime_prime(0, 0)], Rotation::cur());
+        //     let mut get_xored_bit = |i| {
+        //         let rc_bit_i = (0..NUM_ROUNDS).fold(Expression::Constant(F::ZERO), |acc, r| {
+        //             let this_round = meta.query_advice(cols[reg_step(r)], Rotation::cur());
+        //             let this_round_constant =
+        //                 Expression::Constant(F::from(rc_value_bit(r, i) as u64));
+        //             acc + this_round * this_round_constant
+        //         });
+
+        //         xor_gen(
+        //             meta.query_advice(cols[reg_a_prime_prime_0_0_bit(i)], Rotation::cur()),
+        //             Expression::Constant(if i == 0 { F::ONE } else { F::ZERO }),
+        //         )
+        //     };
+
+        //     let computed = (0..64).rev().fold(Expression::Constant(F::ZERO), |acc, z| {
+        //         Expression::Constant(F::from(2)) * acc + get_xored_bit(z)
+        //     });
+            
+        //     vec![s * (a_prime_prime_prime_0_0 - computed)]
+        // });
+
         // Copying A'' to A for next round
-        // TODO: Replace with actual columns
         for x in 0..5 {
             for y in 0..5 {
                 // To initialize the first A, we need to set it to the input
@@ -236,10 +265,11 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
 
                 meta.create_gate("a", |meta| {
                     let s_not_last = meta.query_selector(selector_not_last);
-                    let a = reg_a(x, y);
-                    let diff = meta.query_advice(cols[a], Rotation::cur())
-                        - meta.query_advice(cols[a], Rotation::next());
-                    vec![s_not_last * diff]
+                    
+                    let output = meta.query_advice(cols[reg_a_prime_prime_prime(x, y)], Rotation::cur());
+                    let input = meta.query_advice(cols[reg_a(x, y)], Rotation::next());
+
+                    vec![s_not_last * (output - input)]
                 });
             }
         }
@@ -326,17 +356,17 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                         }
 
                         // Assign A
-                        // TODO: Change cur column to A''
                         for x in 0..5 {
                             for y in 0..5 {
-                                let a = reg_a(x, y);
+                                let input = reg_a(x, y);
+                                let output = reg_a_prime_prime_prime(x, y);
                                 region.assign_advice(
                                     || "a",
-                                    self.config.cols[a],
+                                    self.config.cols[input],
                                     round,
-                                    || Value::known(row[a]),
+                                    || Value::known(row[output]),
                                 )?;
-                                row[a] = row[a];
+                                row[input] = row[output];
                             }
                         }
                     }
@@ -441,9 +471,10 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                     }
 
                     // For the XOR, we split A''[0, 0] to bits.
-                    let bits = row[reg_a_prime_prime(0, 0)].to_le_bits();
+                    let a_prime_prime_0_0_bits = row[reg_a_prime_prime(0, 0)].to_le_bits();
+
                     for i in 0..64 {
-                        let val = F::from(bits[i] as u64);
+                        let val = F::from(a_prime_prime_0_0_bits[i] as u64);
                         region.assign_advice(
                             || "a_prime_prime_0_0",
                             self.config.cols[reg_a_prime_prime_0_0_bit(i)],
@@ -452,6 +483,21 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                         )?;
                         row[reg_a_prime_prime_0_0_bit(i)] = val;
                     }
+
+                    // A''[0, 0] is additionally xor'd with RC.
+                    let val = F::from(
+                        a_prime_prime_0_0_bits
+                            .iter()
+                            .fold(0u64, |acc, b| (acc << 1) + (*b as u64))
+                            ^ rc_value(round),
+                    );
+                    region.assign_advice(
+                        || "a_prime_prime_prime_0_0",
+                        self.config.cols[reg_a_prime_prime_prime(0, 0)],
+                        round,
+                        || Value::known(val),
+                    )?;
+                    row[reg_a_prime_prime_prime(0, 0)] = val;
                 }
 
                 Ok(())
@@ -516,7 +562,8 @@ mod tests {
 
         let circuit = KeccakCircuit(PhantomData);
 
-        let input: [u64; NUM_INPUTS] = rand::random();
+        // let input: [u64; NUM_INPUTS] = rand::random();
+        let input = [0u64; NUM_INPUTS];
         let public_input = input.map(|x| Fp::from(x)).to_vec();
 
         // println!("public_input: {:?}", public_input);
