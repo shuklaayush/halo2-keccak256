@@ -67,6 +67,7 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
         let instance_output = meta.instance_column();
         // let constant = meta.fixed_column();
 
+        // TODO: Remove all enable_equality
         meta.enable_equality(instance_input);
         meta.enable_equality(instance_output);
         // meta.enable_constant(constant);
@@ -292,28 +293,9 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
     }
 
     pub fn assign(&self, mut layouter: impl Layouter<F>) -> Result<Vec<Cell>, Error> {
-        let field_to_u64 = |x: F| {
-            x.to_le_bits()
-                .iter()
-                .rev()
-                .fold(0u64, |acc, b| (acc << 1) + (*b as u64))
-        };
-
-        let print_row = |caption, row: &[F]| {
-            println!("{:}", caption);
-            for y in 0..5 {
-                for x in 0..5 {
-                    let idx = reg_a_prime_prime_prime(x, y);
-                    print!("{:016x} ", field_to_u64(row[idx]));
-                }
-                println!();
-            }
-        };
-
         layouter.assign_region(
             || "keccak table",
             |mut region| {
-
                 // Store values in local row
                 let mut row: [F; NUM_COLUMNS] = [F::ZERO; NUM_COLUMNS];
 
@@ -328,10 +310,6 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
 
                 // Assign remaining rows
                 for round in 0..NUM_ROUNDS {
-                    println!("------------------------------------------------------------------------------------");
-                    println!("Round: {}", round);
-                    println!("------------------------------------------------------------------------------------");
-
                     cells = Vec::new();
 
                     self.config.selector.enable(&mut region, round)?;
@@ -344,12 +322,16 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                     // Assign round flags
                     for i in 0..NUM_ROUNDS {
                         let val = if i == round { F::ONE } else { F::ZERO };
-                        cells.push(region.assign_advice(
-                            || "advice",
-                            self.config.cols[reg_step(i)],
-                            round,
-                            || Value::known(val),
-                        )?.cell());
+                        cells.push(
+                            region
+                                .assign_advice(
+                                    || "advice",
+                                    self.config.cols[reg_step(i)],
+                                    round,
+                                    || Value::known(val),
+                                )?
+                                .cell(),
+                        );
                         row[reg_step(i)] = val;
                     }
 
@@ -378,13 +360,17 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                         for x in 0..5 {
                             for y in 0..5 {
                                 let a = reg_a(x, y);
-                                cells.push(region.assign_advice_from_instance(
-                                    || "a",
-                                    self.config.instance_input,
-                                    y * 5 + x,
-                                    self.config.cols[a],
-                                    0,
-                                )?.cell());
+                                cells.push(
+                                    region
+                                        .assign_advice_from_instance(
+                                            || "a",
+                                            self.config.instance_input,
+                                            y * 5 + x,
+                                            self.config.cols[a],
+                                            0,
+                                        )?
+                                        .cell(),
+                                );
                                 row[a] = row[reg_preimage(x, y)];
                             }
                         }
@@ -393,12 +379,16 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                         for x in 0..5 {
                             for y in 0..5 {
                                 let preimage = reg_preimage(x, y);
-                                cells.push(region.assign_advice(
-                                    || "preimage",
-                                    self.config.cols[preimage],
-                                    round,
-                                    || Value::known(row[preimage]),
-                                )?.cell());
+                                cells.push(
+                                    region
+                                        .assign_advice(
+                                            || "preimage",
+                                            self.config.cols[preimage],
+                                            round,
+                                            || Value::known(row[preimage]),
+                                        )?
+                                        .cell(),
+                                );
                             }
                         }
 
@@ -407,12 +397,16 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                             for y in 0..5 {
                                 let input = reg_a(x, y);
                                 let output = reg_a_prime_prime_prime(x, y);
-                                cells.push(region.assign_advice(
-                                    || "a",
-                                    self.config.cols[input],
-                                    round,
-                                    || Value::known(row[output]),
-                                )?.cell());
+                                cells.push(
+                                    region
+                                        .assign_advice(
+                                            || "a",
+                                            self.config.cols[input],
+                                            round,
+                                            || Value::known(row[output]),
+                                        )?
+                                        .cell(),
+                                );
                                 row[input] = row[output];
                             }
                         }
@@ -429,12 +423,16 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                                     F::from(bits[z] as u64)
                                 })
                                 .collect::<Vec<_>>());
-                            cells.push(region.assign_advice(
-                                || "c",
-                                self.config.cols[reg_c(x, z)],
-                                round,
-                                || Value::known(xor),
-                            )?.cell());
+                            cells.push(
+                                region
+                                    .assign_advice(
+                                        || "c",
+                                        self.config.cols[reg_c(x, z)],
+                                        round,
+                                        || Value::known(xor),
+                                    )?
+                                    .cell(),
+                            );
                             row[reg_c(x, z)] = xor;
                         }
                     }
@@ -447,12 +445,16 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                                 row[reg_c((x + 4) % 5, z)],
                                 row[reg_c((x + 1) % 5, (z + 63) % 64)],
                             ]);
-                            cells.push(region.assign_advice(
-                                || "c_prime",
-                                self.config.cols[reg_c_prime(x, z)],
-                                round,
-                                || Value::known(xor),
-                            )?.cell());
+                            cells.push(
+                                region
+                                    .assign_advice(
+                                        || "c_prime",
+                                        self.config.cols[reg_c_prime(x, z)],
+                                        round,
+                                        || Value::known(xor),
+                                    )?
+                                    .cell(),
+                            );
                             row[reg_c_prime(x, z)] = xor;
                         }
                     }
@@ -466,12 +468,16 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                             for z in 0..64 {
                                 let a_bit = F::from(row[reg_a(x, y)].to_le_bits()[z] as u64);
                                 let xor = xor(&[a_bit, row[reg_c(x, z)], row[reg_c_prime(x, z)]]);
-                                cells.push(region.assign_advice(
-                                    || "a_prime",
-                                    self.config.cols[reg_a_prime(x, y, z)],
-                                    round,
-                                    || Value::known(xor),
-                                )?.cell());
+                                cells.push(
+                                    region
+                                        .assign_advice(
+                                            || "a_prime",
+                                            self.config.cols[reg_a_prime(x, y, z)],
+                                            round,
+                                            || Value::known(xor),
+                                        )?
+                                        .cell(),
+                                );
                                 row[reg_a_prime(x, y, z)] = xor;
                             }
                         }
@@ -495,12 +501,16 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                                 .rev()
                                 .fold(F::ZERO, |acc, z| F::from(2) * acc + get_bit(z));
 
-                            cells.push(region.assign_advice(
-                                || "a_prime_prime",
-                                self.config.cols[reg_a_prime_prime(x, y)],
-                                round,
-                                || Value::known(val),
-                            )?.cell());
+                            cells.push(
+                                region
+                                    .assign_advice(
+                                        || "a_prime_prime",
+                                        self.config.cols[reg_a_prime_prime(x, y)],
+                                        round,
+                                        || Value::known(val),
+                                    )?
+                                    .cell(),
+                            );
                             row[reg_a_prime_prime(x, y)] = val;
                         }
                     }
@@ -510,12 +520,16 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
 
                     for i in 0..64 {
                         let val = F::from(a_prime_prime_0_0_bits[i] as u64);
-                        cells.push(region.assign_advice(
-                            || "a_prime_prime_0_0",
-                            self.config.cols[reg_a_prime_prime_0_0_bit(i)],
-                            round,
-                            || Value::known(val),
-                        )?.cell());
+                        cells.push(
+                            region
+                                .assign_advice(
+                                    || "a_prime_prime_0_0",
+                                    self.config.cols[reg_a_prime_prime_0_0_bit(i)],
+                                    round,
+                                    || Value::known(val),
+                                )?
+                                .cell(),
+                        );
                         row[reg_a_prime_prime_0_0_bit(i)] = val;
                     }
 
@@ -527,16 +541,17 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                             .fold(0u64, |acc, b| (acc << 1) + (*b as u64))
                             ^ rc_value(round),
                     );
-                    cells.push(region.assign_advice(
-                        || "a_prime_prime_prime_0_0",
-                        self.config.cols[reg_a_prime_prime_prime(0, 0)],
-                        round,
-                        || Value::known(val),
-                    )?.cell());
+                    cells.push(
+                        region
+                            .assign_advice(
+                                || "a_prime_prime_prime_0_0",
+                                self.config.cols[reg_a_prime_prime_prime(0, 0)],
+                                round,
+                                || Value::known(val),
+                            )?
+                            .cell(),
+                    );
                     row[reg_a_prime_prime_prime(0, 0)] = val;
-
-                    print_row("After theta:", &row);
-                    println!("------------------------------------------------------------------------------------");
                 }
 
                 Ok((0..NUM_INPUTS).map(|i| cells[reg_output(i)]).collect())
@@ -595,13 +610,9 @@ mod tests {
     use ark_std::{end_timer, start_timer};
     use halo2_proofs::{
         dev::MockProver,
-        halo2curves::{
-            bn256::{Bn256, G1Affine},
-            pasta::Fp,
-            CurveAffine,
-        },
+        halo2curves::bn256::{Bn256, Fr, G1Affine},
         poly::{
-            commitment::{Params, ParamsProver},
+            commitment::ParamsProver,
             kzg::{
                 commitment::{KZGCommitmentScheme, ParamsKZG},
                 multiopen::{ProverSHPLONK, VerifierSHPLONK},
@@ -612,8 +623,8 @@ mod tests {
             Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
         },
     };
-    use rand_core::OsRng;
     use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
+    use rand_core::OsRng;
 
     #[test]
     fn test_keccak_correctness() {
@@ -631,12 +642,12 @@ mod tests {
         };
 
         let public_inputs = vec![
-            input.map(|x| Fp::from(x)).to_vec(),
-            expected.map(|x| Fp::from(x)).to_vec(),
+            input.map(|x| Fr::from(x)).to_vec(),
+            expected.map(|x| Fr::from(x)).to_vec(),
         ];
         // println!("public_input: {:?}", public_input);
 
-        let prover = MockProver::run(k, &circuit, public_inputs.clone()).unwrap();
+        let prover = MockProver::run(k, &circuit, public_inputs).unwrap();
         prover.assert_satisfied();
     }
 
@@ -656,9 +667,13 @@ mod tests {
         };
 
         let public_inputs = vec![
-            input.map(|x| Fp::from(x)).to_vec(),
-            expected.map(|x| Fp::from(x)).to_vec(),
+            input.map(|x| Fr::from(x)).to_vec(),
+            expected.map(|x| Fr::from(x)).to_vec(),
         ];
+        let instance = public_inputs
+            .iter()
+            .map(|v| v.as_slice())
+            .collect::<Vec<_>>();
 
         // Generate proof
         let srs_params = ParamsKZG::<Bn256>::setup(k, ChaCha20Rng::from_seed(Default::default()));
@@ -685,7 +700,7 @@ mod tests {
             &srs_params,
             &pk,
             &[circuit],
-            &[&[]],
+            &[&instance.as_slice()],
             &mut rng,
             &mut transcript,
         )
@@ -709,10 +724,13 @@ mod tests {
             verifier_params,
             pk.get_vk(),
             strategy,
-            &[&[]],
+            &[&instance.as_slice()],
             &mut transcript,
         )
         .unwrap();
+        end_timer!(verify_time);
+
+        println!("proof_size: {} bytes", proof_size);
     }
 
     #[cfg(feature = "dev-graph")]
@@ -724,7 +742,7 @@ mod tests {
         root.fill(&WHITE).unwrap();
         let root = root.titled("Keccak Layout", ("sans-serif", 60)).unwrap();
 
-        let circuit = KeccakCircuit::<Fp>(PhantomData);
+        let circuit = KeccakCircuit::<Fr>(PhantomData);
         halo2_proofs::dev::CircuitLayout::default()
             .render(5, &circuit, &root)
             .unwrap();
