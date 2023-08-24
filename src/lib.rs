@@ -33,7 +33,6 @@ struct KeccakConfig {
 
     pub instance_input: Column<Instance>,
     pub instance_output: Column<Instance>,
-    // pub constant: Column<Fixed>,
 }
 
 #[derive(Debug, Clone)]
@@ -57,7 +56,6 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
 
     pub fn configure(meta: &mut ConstraintSystem<F>) -> KeccakConfig {
         // Create columns
-
         let selector = meta.selector();
         let selector_first = meta.selector();
         let selector_last = meta.selector();
@@ -65,12 +63,6 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
 
         let instance_input = meta.instance_column();
         let instance_output = meta.instance_column();
-        // let constant = meta.fixed_column();
-
-        // TODO: Remove all enable_equality
-        meta.enable_equality(instance_input);
-        meta.enable_equality(instance_output);
-        // meta.enable_constant(constant);
 
         let cols: [Column<Advice>; NUM_COLUMNS] = (0..NUM_COLUMNS)
             .map(|_| meta.advice_column())
@@ -78,13 +70,9 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
             .try_into()
             .unwrap();
 
-        for i in 0..NUM_INPUTS {
-            meta.enable_equality(cols[reg_output(i)]);
-        }
         // Assign constraints
 
         // First round flag
-        // TODO: Maybe use copy constraint instead of gate and selector
         meta.create_gate("first_round_flag", |meta| {
             let s_first = meta.query_selector(selector_first);
 
@@ -95,8 +83,6 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
         // Round flags
         for i in 0..NUM_ROUNDS {
             // To initialize the first round flag, we need to set it to 1
-            meta.enable_equality(cols[reg_step(i)]);
-
             meta.create_gate("round_flags", |meta| {
                 let s_not_last = meta.query_selector(selector_not_last);
 
@@ -111,8 +97,20 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
         for x in 0..5 {
             for y in 0..5 {
                 // To initialize the first preimage, we need to set it to the input
-                meta.enable_equality(cols[reg_preimage(x, y)]);
+                // meta.create_gate("preimage first", |meta| {
+                //     let s_first = meta.query_selector(selector_first);
 
+                //     let preimage = reg_preimage(x, y);
+                //     let input = meta.query_advice(cols[preimage], Rotation::cur());
+                //     vec![
+                //         s_first
+                //             * (input
+                //                 - meta
+                //                     .query_instance(instance_input, Rotation((y * 5 + x) as i32))),
+                //     ]
+                // });
+
+                // Copy remaining preimages
                 meta.create_gate("preimage", |meta| {
                     let s_not_last = meta.query_selector(selector_not_last);
 
@@ -262,12 +260,24 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
             vec![s * (a_prime_prime_prime_0_0 - computed)]
         });
 
-        // Copying A'' to A for next round
+        // Round input A
         for x in 0..5 {
             for y in 0..5 {
                 // To initialize the first A, we need to set it to the input
-                meta.enable_equality(cols[reg_a(x, y)]);
+                // meta.create_gate("a first", |meta| {
+                //     let s_first = meta.query_selector(selector_first);
 
+                //     let a = reg_a(x, y);
+                //     let input = meta.query_advice(cols[a], Rotation::cur());
+                //     vec![
+                //         s_first
+                //             * (input
+                //                 - meta
+                //                     .query_instance(instance_input, Rotation((y * 5 + x) as i32))),
+                //     ]
+                // });
+
+                // Copying A'' to A for next round
                 meta.create_gate("a", |meta| {
                     let s_not_last = meta.query_selector(selector_not_last);
 
@@ -278,6 +288,17 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                     vec![s_not_last * (output - input)]
                 });
             }
+
+            // Output
+            // for i in 0..NUM_INPUTS {
+            //     meta.create_gate("output", |meta| {
+            //         let s_last = meta.query_selector(selector_last);
+
+            //         let output = meta.query_advice(cols[reg_output(i)], Rotation::cur());
+            //         let expected = meta.query_instance(instance_output, Rotation(i as i32));
+            //         vec![s_last * (output - expected)]
+            //     });
+            // }
         }
 
         KeccakConfig {
@@ -288,11 +309,18 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
             selector_not_last,
             instance_input,
             instance_output,
-            // constant,
         }
     }
 
-    pub fn assign(&self, mut layouter: impl Layouter<F>) -> Result<Vec<Cell>, Error> {
+    pub fn assign(&self, mut layouter: impl Layouter<F>) -> Result<(), Error> {
+        let inputs = (0..NUM_INPUTS)
+            .map(|i| {
+                layouter
+                    .query_instance(self.config.instance_input, i)
+                    .unwrap()
+            })
+            .collect::<Vec<_>>();
+
         layouter.assign_region(
             || "keccak table",
             |mut region| {
@@ -305,13 +333,8 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                     .selector_last
                     .enable(&mut region, NUM_ROUNDS - 1)?;
 
-                // TODO: Maybe only store on last row
-                let mut cells = vec![];
-
                 // Assign remaining rows
                 for round in 0..NUM_ROUNDS {
-                    cells = Vec::new();
-
                     self.config.selector.enable(&mut region, round)?;
 
                     if round < NUM_ROUNDS - 1 {
@@ -322,16 +345,12 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                     // Assign round flags
                     for i in 0..NUM_ROUNDS {
                         let val = if i == round { F::ONE } else { F::ZERO };
-                        cells.push(
-                            region
-                                .assign_advice(
-                                    || "advice",
-                                    self.config.cols[reg_step(i)],
-                                    round,
-                                    || Value::known(val),
-                                )?
-                                .cell(),
-                        );
+                        region.assign_advice(
+                            || "advice",
+                            self.config.cols[reg_step(i)],
+                            round,
+                            || Value::known(val),
+                        )?;
                         row[reg_step(i)] = val;
                     }
 
@@ -340,14 +359,12 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                         for x in 0..5 {
                             for y in 0..5 {
                                 let preimage = reg_preimage(x, y);
-                                let cell = region.assign_advice_from_instance(
+                                let cell = region.assign_advice(
                                     || "preimage",
-                                    self.config.instance_input,
-                                    y * 5 + x,
                                     self.config.cols[preimage],
                                     0,
+                                    || inputs[y * 5 + x],
                                 )?;
-                                cells.push(cell.cell());
                                 let value: PubValue<F> =
                                     unsafe { std::mem::transmute_copy(&cell.value().copied()) };
                                 if let Some(v) = value.inner {
@@ -360,17 +377,12 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                         for x in 0..5 {
                             for y in 0..5 {
                                 let a = reg_a(x, y);
-                                cells.push(
-                                    region
-                                        .assign_advice_from_instance(
-                                            || "a",
-                                            self.config.instance_input,
-                                            y * 5 + x,
-                                            self.config.cols[a],
-                                            0,
-                                        )?
-                                        .cell(),
-                                );
+                                region.assign_advice(
+                                    || "preimage",
+                                    self.config.cols[a],
+                                    0,
+                                    || inputs[y * 5 + x],
+                                )?;
                                 row[a] = row[reg_preimage(x, y)];
                             }
                         }
@@ -379,16 +391,12 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                         for x in 0..5 {
                             for y in 0..5 {
                                 let preimage = reg_preimage(x, y);
-                                cells.push(
-                                    region
-                                        .assign_advice(
-                                            || "preimage",
-                                            self.config.cols[preimage],
-                                            round,
-                                            || Value::known(row[preimage]),
-                                        )?
-                                        .cell(),
-                                );
+                                region.assign_advice(
+                                    || "preimage",
+                                    self.config.cols[preimage],
+                                    round,
+                                    || Value::known(row[preimage]),
+                                )?;
                             }
                         }
 
@@ -397,16 +405,12 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                             for y in 0..5 {
                                 let input = reg_a(x, y);
                                 let output = reg_a_prime_prime_prime(x, y);
-                                cells.push(
-                                    region
-                                        .assign_advice(
-                                            || "a",
-                                            self.config.cols[input],
-                                            round,
-                                            || Value::known(row[output]),
-                                        )?
-                                        .cell(),
-                                );
+                                region.assign_advice(
+                                    || "a",
+                                    self.config.cols[input],
+                                    round,
+                                    || Value::known(row[output]),
+                                )?;
                                 row[input] = row[output];
                             }
                         }
@@ -423,16 +427,12 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                                     F::from(bits[z] as u64)
                                 })
                                 .collect::<Vec<_>>());
-                            cells.push(
-                                region
-                                    .assign_advice(
-                                        || "c",
-                                        self.config.cols[reg_c(x, z)],
-                                        round,
-                                        || Value::known(xor),
-                                    )?
-                                    .cell(),
-                            );
+                            region.assign_advice(
+                                || "c",
+                                self.config.cols[reg_c(x, z)],
+                                round,
+                                || Value::known(xor),
+                            )?;
                             row[reg_c(x, z)] = xor;
                         }
                     }
@@ -445,16 +445,12 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                                 row[reg_c((x + 4) % 5, z)],
                                 row[reg_c((x + 1) % 5, (z + 63) % 64)],
                             ]);
-                            cells.push(
-                                region
-                                    .assign_advice(
-                                        || "c_prime",
-                                        self.config.cols[reg_c_prime(x, z)],
-                                        round,
-                                        || Value::known(xor),
-                                    )?
-                                    .cell(),
-                            );
+                            region.assign_advice(
+                                || "c_prime",
+                                self.config.cols[reg_c_prime(x, z)],
+                                round,
+                                || Value::known(xor),
+                            )?;
                             row[reg_c_prime(x, z)] = xor;
                         }
                     }
@@ -468,16 +464,12 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                             for z in 0..64 {
                                 let a_bit = F::from(row[reg_a(x, y)].to_le_bits()[z] as u64);
                                 let xor = xor(&[a_bit, row[reg_c(x, z)], row[reg_c_prime(x, z)]]);
-                                cells.push(
-                                    region
-                                        .assign_advice(
-                                            || "a_prime",
-                                            self.config.cols[reg_a_prime(x, y, z)],
-                                            round,
-                                            || Value::known(xor),
-                                        )?
-                                        .cell(),
-                                );
+                                region.assign_advice(
+                                    || "a_prime",
+                                    self.config.cols[reg_a_prime(x, y, z)],
+                                    round,
+                                    || Value::known(xor),
+                                )?;
                                 row[reg_a_prime(x, y, z)] = xor;
                             }
                         }
@@ -501,16 +493,12 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                                 .rev()
                                 .fold(F::ZERO, |acc, z| F::from(2) * acc + get_bit(z));
 
-                            cells.push(
-                                region
-                                    .assign_advice(
-                                        || "a_prime_prime",
-                                        self.config.cols[reg_a_prime_prime(x, y)],
-                                        round,
-                                        || Value::known(val),
-                                    )?
-                                    .cell(),
-                            );
+                            region.assign_advice(
+                                || "a_prime_prime",
+                                self.config.cols[reg_a_prime_prime(x, y)],
+                                round,
+                                || Value::known(val),
+                            )?;
                             row[reg_a_prime_prime(x, y)] = val;
                         }
                     }
@@ -520,16 +508,12 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
 
                     for i in 0..64 {
                         let val = F::from(a_prime_prime_0_0_bits[i] as u64);
-                        cells.push(
-                            region
-                                .assign_advice(
-                                    || "a_prime_prime_0_0",
-                                    self.config.cols[reg_a_prime_prime_0_0_bit(i)],
-                                    round,
-                                    || Value::known(val),
-                                )?
-                                .cell(),
-                        );
+                        region.assign_advice(
+                            || "a_prime_prime_0_0",
+                            self.config.cols[reg_a_prime_prime_0_0_bit(i)],
+                            round,
+                            || Value::known(val),
+                        )?;
                         row[reg_a_prime_prime_0_0_bit(i)] = val;
                     }
 
@@ -541,33 +525,18 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                             .fold(0u64, |acc, b| (acc << 1) + (*b as u64))
                             ^ rc_value(round),
                     );
-                    cells.push(
-                        region
-                            .assign_advice(
-                                || "a_prime_prime_prime_0_0",
-                                self.config.cols[reg_a_prime_prime_prime(0, 0)],
-                                round,
-                                || Value::known(val),
-                            )?
-                            .cell(),
-                    );
+                    region.assign_advice(
+                        || "a_prime_prime_prime_0_0",
+                        self.config.cols[reg_a_prime_prime_prime(0, 0)],
+                        round,
+                        || Value::known(val),
+                    )?;
                     row[reg_a_prime_prime_prime(0, 0)] = val;
                 }
 
-                Ok((0..NUM_INPUTS).map(|i| cells[reg_output(i)]).collect())
+                Ok(())
             },
         )
-    }
-
-    pub fn expose_public(
-        &self,
-        mut layouter: impl Layouter<F>,
-        cells: &[Cell],
-    ) -> Result<(), Error> {
-        for i in 0..NUM_INPUTS {
-            layouter.constrain_instance(cells[i], self.config.instance_output, i)?;
-        }
-        Ok(())
     }
 }
 
@@ -593,8 +562,7 @@ impl<F: PrimeFieldBits> Circuit<F> for KeccakCircuit<F> {
     ) -> Result<(), Error> {
         let chip = KeccakChip::construct(config);
 
-        let output_cells = chip.assign(layouter.namespace(|| "table"))?;
-        chip.expose_public(layouter, &output_cells)?;
+        chip.assign(layouter.namespace(|| "table"))?;
 
         Ok(())
     }
