@@ -77,6 +77,7 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
         // TODO: Maybe use copy constraint instead of gate and selector
         meta.create_gate("first_round_flag", |meta| {
             let s_first = meta.query_selector(selector_first);
+
             let first_round_flag = meta.query_advice(cols[reg_step(0)], Rotation::cur());
             vec![s_first * (first_round_flag - Expression::Constant(F::ONE))]
         });
@@ -88,6 +89,7 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
 
             meta.create_gate("round_flags", |meta| {
                 let s_not_last = meta.query_selector(selector_not_last);
+
                 let current_round_flag = meta.query_advice(cols[reg_step(i)], Rotation::cur());
                 let next_round_flag =
                     meta.query_advice(cols[reg_step((i + 1) % NUM_ROUNDS)], Rotation::next());
@@ -103,6 +105,7 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
 
                 meta.create_gate("preimage", |meta| {
                     let s_not_last = meta.query_selector(selector_not_last);
+
                     let preimage = reg_preimage(x, y);
                     let diff = meta.query_advice(cols[preimage], Rotation::cur())
                         - meta.query_advice(cols[preimage], Rotation::next());
@@ -116,6 +119,7 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
             for z in 0..64 {
                 meta.create_gate("c_prime", |meta| {
                     let s = meta.query_selector(selector);
+
                     let xor = xor3_gen(
                         meta.query_advice(cols[reg_c(x, z)], Rotation::cur()),
                         meta.query_advice(cols[reg_c((x + 4) % 5, z)], Rotation::cur()),
@@ -137,6 +141,7 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
             for y in 0..5 {
                 meta.create_gate("a", |meta| {
                     let s = meta.query_selector(selector);
+
                     let a = meta.query_advice(cols[reg_a(x, y)], Rotation::cur());
                     let mut get_bit = |z| {
                         let a_prime =
@@ -149,6 +154,29 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                         Expression::Constant(F::from(2)) * acc + get_bit(z)
                     });
                     vec![s * (a - computed)]
+                });
+            }
+        }
+
+        // TODO: How do the constraints match with what's written below?
+        // xor_{i=0}^4 A'[x, i, z] = C'[x, z], so for each x, z,
+        // diff * (diff - 2) * (diff - 4) = 0, where
+        // diff = sum_{i=0}^4 A'[x, i, z] - C'[x, z]
+        for x in 0..5 {
+            for z in 0..64 {
+                meta.create_gate("a_prime", |meta| {
+                    let s = meta.query_selector(selector);
+
+                    let sum = (0..5).fold(Expression::Constant(F::ZERO), |acc, i| {
+                        acc + meta.query_advice(cols[reg_a_prime(x, i, z)], Rotation::cur())
+                    });
+                    let c_prime = meta.query_advice(cols[reg_c_prime(x, z)], Rotation::cur());
+                    let diff = sum - c_prime;
+                    vec![
+                        s * diff.clone()
+                            * (diff.clone() - Expression::Constant(F::from(2)))
+                            * (diff - Expression::Constant(F::from(4))),
+                    ]
                 });
             }
         }
