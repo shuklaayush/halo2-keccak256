@@ -21,3 +21,13 @@ pub(crate) fn xor3_gen<F: PrimeField>(
 ) -> Expression<F> {
     xor_gen(x, xor_gen(y, z))
 }
+
+pub(crate) fn andn<F: PrimeField>(x: F, y: F) -> F {
+    debug_assert!(x == F::ZERO || x == F::ONE);
+    debug_assert!(y == F::ZERO || y == F::ONE);
+    (F::ONE - x) * y
+}
+
+pub(crate) fn andn_gen<F: PrimeField>(x: Expression<F>, y: Expression<F>) -> Expression<F> {
+    (Expression::Constant(F::ONE) - x) * y
+}

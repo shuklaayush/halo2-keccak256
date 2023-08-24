@@ -5,8 +5,10 @@ use ff::{PrimeField, PrimeFieldBits};
 use halo2_proofs::{arithmetic::Field, circuit::*, plonk::*, poly::Rotation};
 use std::marker::PhantomData;
 
-use columns::{reg_a, reg_a_prime, reg_c, reg_c_prime, reg_preimage, reg_step};
-use logic::{xor, xor3_gen};
+use columns::{
+    reg_a, reg_a_prime, reg_a_prime_prime, reg_b, reg_c, reg_c_prime, reg_preimage, reg_step,
+};
+use logic::{andn, andn_gen, xor, xor3_gen, xor_gen};
 // use columns::{NUM_COLUMNS};
 
 /// Number of rounds in a Keccak permutation.
@@ -16,7 +18,7 @@ pub(crate) const NUM_ROUNDS: usize = 2;
 /// Number of 64-bit elements in the Keccak permutation input.
 pub(crate) const NUM_INPUTS: usize = 25;
 
-const NUM_COLUMNS: usize = 2292;
+const NUM_COLUMNS: usize = 2342;
 
 #[derive(Debug, Clone)]
 struct KeccakConfig {
@@ -177,6 +179,33 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                             * (diff.clone() - Expression::Constant(F::from(2)))
                             * (diff - Expression::Constant(F::from(4))),
                     ]
+                });
+            }
+        }
+
+        // A''[x, y] = xor(B[x, y], andn(B[x + 1, y], B[x + 2, y])).
+        for x in 0..5 {
+            for y in 0..5 {
+                meta.create_gate("a_prime_prime", |meta| {
+                    let s = meta.query_selector(selector);
+
+                    let a_prime_prime =
+                        meta.query_advice(cols[reg_a_prime_prime(x, y)], Rotation::cur());
+                    let mut get_bit = |z| {
+                        xor_gen(
+                            meta.query_advice(cols[reg_b(x, y, z)], Rotation::cur()),
+                            andn_gen(
+                                meta.query_advice(cols[reg_b((x + 1) % 5, y, z)], Rotation::cur()),
+                                meta.query_advice(cols[reg_b((x + 2) % 5, y, z)], Rotation::cur()),
+                            ),
+                        )
+                    };
+
+                    let computed = (0..64).rev().fold(Expression::Constant(F::ZERO), |acc, z| {
+                        Expression::Constant(F::from(2)) * acc + get_bit(z)
+                    });
+
+                    vec![s * (a_prime_prime - computed)]
                 });
             }
         }
@@ -365,7 +394,37 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                             }
                         }
                     }
+
+                    // Populate A''.
+                    // A''[x, y] = xor(B[x, y], andn(B[x + 1, y], B[x + 2, y])).
+                    for x in 0..5 {
+                        for y in 0..5 {
+                            let get_bit = |z| {
+                                xor(&[
+                                    row[reg_b(x, y, z)],
+                                    andn(
+                                        row[reg_b((x + 1) % 5, y, z)],
+                                        row[reg_b((x + 2) % 5, y, z)],
+                                    ),
+                                ])
+                            };
+
+                            let val = (0..64)
+                                .rev()
+                                .fold(F::ZERO, |acc, z| F::from(2) * acc + get_bit(z));
+
+                            region.assign_advice(
+                                || "a_prime_prime",
+                                self.config.cols[reg_a_prime_prime(x, y)],
+                                round,
+                                || Value::known(val),
+                            )?;
+
+                            row[reg_a_prime_prime(x, y)] = val;
+                        }
+                    }
                 }
+
                 Ok(())
             },
         )
