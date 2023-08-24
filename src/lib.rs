@@ -6,7 +6,8 @@ use halo2_proofs::{arithmetic::Field, circuit::*, plonk::*, poly::Rotation};
 use std::marker::PhantomData;
 
 use columns::{
-    reg_a, reg_a_prime, reg_a_prime_prime, reg_b, reg_c, reg_c_prime, reg_preimage, reg_step,
+    reg_a, reg_a_prime, reg_a_prime_prime, reg_a_prime_prime_0_0_bit, reg_b, reg_c, reg_c_prime,
+    reg_preimage, reg_step,
 };
 use logic::{andn, andn_gen, xor, xor3_gen, xor_gen};
 // use columns::{NUM_COLUMNS};
@@ -18,7 +19,7 @@ pub(crate) const NUM_ROUNDS: usize = 2;
 /// Number of 64-bit elements in the Keccak permutation input.
 pub(crate) const NUM_INPUTS: usize = 25;
 
-const NUM_COLUMNS: usize = 2342;
+const NUM_COLUMNS: usize = 2406;
 
 #[derive(Debug, Clone)]
 struct KeccakConfig {
@@ -209,6 +210,22 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                 });
             }
         }
+
+        // A'''[0, 0] = A''[0, 0] XOR RC
+        meta.create_gate("a_prime_prime_0_0", |meta| {
+            let s = meta.query_selector(selector);
+
+            let a_prime_prime_0_0 =
+                meta.query_advice(cols[reg_a_prime_prime(0, 0)], Rotation::cur());
+            let mut get_bit =
+                |i| meta.query_advice(cols[reg_a_prime_prime_0_0_bit(i)], Rotation::cur());
+
+            let computed = (0..64).rev().fold(Expression::Constant(F::ZERO), |acc, i| {
+                Expression::Constant(F::from(2)) * acc + get_bit(i)
+            });
+
+            vec![s * (a_prime_prime_0_0 - computed)]
+        });
 
         // Copying A'' to A for next round
         // TODO: Replace with actual columns
@@ -419,9 +436,21 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                                 round,
                                 || Value::known(val),
                             )?;
-
                             row[reg_a_prime_prime(x, y)] = val;
                         }
+                    }
+
+                    // For the XOR, we split A''[0, 0] to bits.
+                    let bits = row[reg_a_prime_prime(0, 0)].to_le_bits();
+                    for i in 0..64 {
+                        let val = F::from(bits[i] as u64);
+                        region.assign_advice(
+                            || "a_prime_prime_0_0",
+                            self.config.cols[reg_a_prime_prime_0_0_bit(i)],
+                            round,
+                            || Value::known(val),
+                        )?;
+                        row[reg_a_prime_prime_0_0_bit(i)] = val;
                     }
                 }
 
