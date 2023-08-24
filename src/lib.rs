@@ -1,34 +1,45 @@
 mod columns;
+mod logic;
 
+use ff::{PrimeField, PrimeFieldBits};
 use halo2_proofs::{arithmetic::Field, circuit::*, plonk::*, poly::Rotation};
 use std::marker::PhantomData;
 
-use columns::{reg_a, reg_preimage, reg_step};
+use columns::{reg_a, reg_c, reg_c_prime, reg_preimage, reg_step};
+use logic::{xor, xor3_gen};
 // use columns::{NUM_COLUMNS};
 
 /// Number of rounds in a Keccak permutation.
 pub(crate) const NUM_ROUNDS: usize = 24;
+// pub(crate) const NUM_ROUNDS: usize = 2;
 
 /// Number of 64-bit elements in the Keccak permutation input.
 pub(crate) const NUM_INPUTS: usize = 25;
 
-const NUM_COLUMNS: usize = 74;
+const NUM_COLUMNS: usize = 714;
 
 #[derive(Debug, Clone)]
 struct KeccakConfig {
     pub cols: [Column<Advice>; NUM_COLUMNS],
-    pub selector: Selector,
+    pub selector_first: Selector,
+    pub selector_last: Selector,
+    pub selector_not_last: Selector,
     pub instance: Column<Instance>,
-    pub constant: Column<Fixed>,
+    // pub constant: Column<Fixed>,
 }
 
 #[derive(Debug, Clone)]
-struct KeccakChip<F: Field> {
+struct KeccakChip<F: PrimeFieldBits> {
     config: KeccakConfig,
     _marker: PhantomData<F>,
 }
 
-impl<F: Field> KeccakChip<F> {
+#[derive(Clone, Copy, Debug)]
+pub struct PubValue<V> {
+    pub inner: Option<V>,
+}
+
+impl<F: PrimeFieldBits> KeccakChip<F> {
     pub fn construct(config: KeccakConfig) -> Self {
         Self {
             config,
@@ -37,12 +48,17 @@ impl<F: Field> KeccakChip<F> {
     }
 
     pub fn configure(meta: &mut ConstraintSystem<F>) -> KeccakConfig {
-        let selector = meta.selector();
+        // Create columns
+
+        let selector_first = meta.selector();
+        let selector_last = meta.selector();
+        let selector_not_last = meta.selector();
+
         let instance = meta.instance_column();
-        let constant = meta.fixed_column();
+        // let constant = meta.fixed_column();
 
         meta.enable_equality(instance);
-        meta.enable_constant(constant);
+        // meta.enable_constant(constant);
 
         let cols: [Column<Advice>; NUM_COLUMNS] = (0..NUM_COLUMNS)
             .map(|_| meta.advice_column())
@@ -50,17 +66,27 @@ impl<F: Field> KeccakChip<F> {
             .try_into()
             .unwrap();
 
+        // Assign constraints
+
+        // First round flag
+        // TODO: Maybe use copy constraint instead of gate and selector
+        meta.create_gate("first_round_flag", |meta| {
+            let s_first = meta.query_selector(selector_first);
+            let first_round_flag = meta.query_advice(cols[reg_step(0)], Rotation::cur());
+            vec![s_first * (first_round_flag - Expression::Constant(F::ONE))]
+        });
+
         // Round flags
         for i in 0..NUM_ROUNDS {
             // To initialize the first round flag, we need to set it to 1
             meta.enable_equality(cols[reg_step(i)]);
 
             meta.create_gate("round_flags", |meta| {
-                let s = meta.query_selector(selector);
+                let s_not_last = meta.query_selector(selector_not_last);
                 let current_round_flag = meta.query_advice(cols[reg_step(i)], Rotation::cur());
                 let next_round_flag =
                     meta.query_advice(cols[reg_step((i + 1) % NUM_ROUNDS)], Rotation::next());
-                vec![s * (next_round_flag - current_round_flag)]
+                vec![s_not_last * (next_round_flag - current_round_flag)]
             });
         }
 
@@ -71,11 +97,27 @@ impl<F: Field> KeccakChip<F> {
                 meta.enable_equality(cols[reg_preimage(x, y)]);
 
                 meta.create_gate("preimage", |meta| {
-                    let s = meta.query_selector(selector);
+                    let s_not_last = meta.query_selector(selector_not_last);
                     let preimage = reg_preimage(x, y);
                     let diff = meta.query_advice(cols[preimage], Rotation::cur())
                         - meta.query_advice(cols[preimage], Rotation::next());
-                    vec![s * diff]
+                    vec![s_not_last * diff]
+                });
+            }
+        }
+
+        // C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1]).
+        for x in 0..5 {
+            for z in 0..64 {
+                meta.create_gate("c_prime", |meta| {
+                    let s_not_last = meta.query_selector(selector_not_last);
+                    let xor = xor3_gen(
+                        meta.query_advice(cols[reg_c(x, z)], Rotation::cur()),
+                        meta.query_advice(cols[reg_c((x + 4) % 5, z)], Rotation::cur()),
+                        meta.query_advice(cols[reg_c((x + 1) % 5, (z + 63) % 64)], Rotation::cur()),
+                    );
+                    let c_prime = meta.query_advice(cols[reg_c_prime(x, z)], Rotation::cur());
+                    vec![s_not_last * (c_prime - xor)]
                 });
             }
         }
@@ -88,128 +130,162 @@ impl<F: Field> KeccakChip<F> {
 
                 // TODO: Change cur column to A''
                 meta.create_gate("a", |meta| {
-                    let s = meta.query_selector(selector);
+                    let s_not_last = meta.query_selector(selector_not_last);
                     let a = reg_a(x, y);
                     let diff = meta.query_advice(cols[a], Rotation::cur())
                         - meta.query_advice(cols[a], Rotation::next());
-                    vec![s * diff]
+                    vec![s_not_last * diff]
                 });
             }
         }
 
         KeccakConfig {
             cols,
-            selector,
+            selector_first,
+            selector_last,
+            selector_not_last,
             instance,
-            constant,
+            // constant,
         }
     }
 
-    pub fn assign(&self, mut layouter: impl Layouter<F>) -> Result<AssignedCell<F, F>, Error> {
+    pub fn assign(&self, mut layouter: impl Layouter<F>) -> Result<(), Error> {
         layouter.assign_region(
             || "keccak table",
             |mut region| {
-                // Assign first row
+                // Store values in local row
+                let mut row: [F; NUM_COLUMNS] = [F::ZERO; NUM_COLUMNS];
 
-                // Assign first round flag
-                let mut round_cells = Vec::with_capacity(NUM_ROUNDS);
-
-                round_cells.push(region.assign_advice_from_constant(
-                    || "1",
-                    self.config.cols[reg_step(0)],
-                    0,
-                    F::ONE,
-                )?);
-
-                for col in 1..NUM_ROUNDS {
-                    round_cells.push(region.assign_advice_from_constant(
-                        || "0",
-                        self.config.cols[reg_step(col)],
-                        0,
-                        F::ZERO,
-                    )?);
-                }
+                // Enable selectors
+                self.config.selector_first.enable(&mut region, 0)?;
+                self.config
+                    .selector_last
+                    .enable(&mut region, NUM_ROUNDS - 1)?;
 
                 // Populate the preimage for first row.
-                let mut preimage_cells = Vec::with_capacity(5 * 5);
-
                 for x in 0..5 {
                     for y in 0..5 {
                         let preimage = reg_preimage(x, y);
-                        preimage_cells.push(region.assign_advice_from_instance(
+                        let cell = region.assign_advice_from_instance(
                             || "preimage",
                             self.config.instance,
                             y * 5 + x,
                             self.config.cols[preimage],
                             0,
-                        )?);
+                        )?;
+                        let value: PubValue<F> =
+                            unsafe { std::mem::transmute_copy(&cell.value().copied()) };
+                        if let Some(v) = value.inner {
+                            row[preimage] = v;
+                        }
                     }
                 }
 
                 // Populate A for first row.
-                let mut a_cells = Vec::with_capacity(5 * 5);
-
                 for x in 0..5 {
                     for y in 0..5 {
                         let a = reg_a(x, y);
-                        a_cells.push(region.assign_advice_from_instance(
+                        region.assign_advice_from_instance(
                             || "a",
                             self.config.instance,
                             y * 5 + x,
                             self.config.cols[a],
                             0,
-                        )?);
+                        )?;
+                        row[a] = row[reg_preimage(x, y)];
                     }
                 }
 
                 // Assign remaining rows
-                for round in 0..NUM_ROUNDS - 1 {
-                    self.config.selector.enable(&mut region, round)?;
-
-                    // Assign round flags
-                    let mut new_round_cells = Vec::with_capacity(NUM_ROUNDS);
-                    for col in 0..NUM_ROUNDS {
-                        new_round_cells.push(region.assign_advice(
-                            || "advice",
-                            self.config.cols[reg_step(col)],
-                            round + 1,
-                            || {
-                                round_cells[(col + NUM_ROUNDS - 1) % NUM_ROUNDS]
-                                    .value()
-                                    .copied()
-                            },
-                        )?);
+                for round in 0..NUM_ROUNDS {
+                    if round < NUM_ROUNDS - 1 {
+                        // Enable selector
+                        self.config.selector_not_last.enable(&mut region, round)?;
                     }
-                    round_cells = new_round_cells;
 
-                    // Assign preimage
-                    for x in 0..5 {
-                        for y in 0..5 {
-                            let preimage = reg_preimage(x, y);
-                            region.assign_advice(
-                                || "preimage",
-                                self.config.cols[preimage],
-                                round + 1,
-                                || preimage_cells[x * 5 + y].value().copied(),
-                            )?;
+                    if round > 0 {
+                        // Assign preimage
+                        for x in 0..5 {
+                            for y in 0..5 {
+                                let preimage = reg_preimage(x, y);
+                                region.assign_advice(
+                                    || "preimage",
+                                    self.config.cols[preimage],
+                                    round,
+                                    || Value::known(row[preimage]),
+                                )?;
+                            }
+                        }
+
+                        // Assign A
+                        // TODO: Change cur column to A''
+                        for x in 0..5 {
+                            for y in 0..5 {
+                                let a = reg_a(x, y);
+                                region.assign_advice(
+                                    || "a",
+                                    self.config.cols[a],
+                                    round,
+                                    || Value::known(row[a]),
+                                )?;
+                                row[a] = row[a];
+                            }
                         }
                     }
 
-                    // Assign A
+                    // Assign round flags
+                    for i in 0..NUM_ROUNDS {
+                        let val = if i == round { F::ONE } else { F::ZERO };
+                        region.assign_advice(
+                            || "advice",
+                            self.config.cols[reg_step(i)],
+                            round,
+                            || Value::known(val),
+                        )?;
+                        row[reg_step(i)] = val;
+                    }
+
+                    // Populate C[x] = xor(A[x, 0], A[x, 1], A[x, 2], A[x, 3], A[x, 4]).
                     for x in 0..5 {
-                        for y in 0..5 {
-                            let a = reg_a(x, y);
+                        for z in 0..64 {
+                            let xor = xor(&(0..5)
+                                .map(|i| {
+                                    let ai = row[reg_a(x, i)];
+                                    let bits = ai.to_le_bits();
+
+                                    F::from(bits[z] as u64)
+                                })
+                                .collect::<Vec<_>>());
                             region.assign_advice(
-                                || "a",
-                                self.config.cols[a],
-                                round + 1,
-                                || a_cells[x * 5 + y].value().copied(),
+                                || "c",
+                                self.config.cols[reg_c(x, z)],
+                                round,
+                                || Value::known(xor),
                             )?;
+                            row[reg_c(x, z)] = xor;
+                        }
+                    }
+
+                    // Populate C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1]).
+                    for x in 0..5 {
+                        for z in 0..64 {
+                            let xor = xor(&[
+                                row[reg_c(x, z)],
+                                row[reg_c((x + 4) % 5, z)],
+                                row[reg_c((x + 1) % 5, (z + 63) % 64)],
+                            ]);
+                            region.assign_advice(
+                                || "c_prime",
+                                self.config.cols[reg_c_prime(x, z)],
+                                round,
+                                || Value::known(xor),
+                            )?;
+                            row[reg_c_prime(x, z)] = xor;
                         }
                     }
                 }
 
-                Ok(round_cells[NUM_ROUNDS - 1].clone())
+                Ok(())
             },
         )
     }
@@ -227,7 +303,7 @@ impl<F: Field> KeccakChip<F> {
 #[derive(Default)]
 struct KeccakCircuit<F>(PhantomData<F>);
 
-impl<F: Field> Circuit<F> for KeccakCircuit<F> {
+impl<F: PrimeFieldBits> Circuit<F> for KeccakCircuit<F> {
     type Config = KeccakConfig;
     type FloorPlanner = SimpleFloorPlanner;
 
