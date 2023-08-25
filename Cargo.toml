@@ -26,4 +26,4 @@ rand_core = "0.6.4"
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 
 # [patch."https://github.com/privacy-scaling-explorations/halo2"]
-# halo2_proofs = { path = "../halo2/halo2_proofs" }
+# halo2_proofs_pse = { package = "halo2_proofs", path = "../halo2/halo2_proofs" }

@@ -30,7 +30,7 @@ struct KeccakConfig {
     //       halo2 selector type is very restrictive.
     pub selector: Selector,
     pub selector_input: Selector,
-    pub selector_output: Selector,
+    // pub selector_output: Selector,
     pub selector_not_output: Selector,
 
     pub _instance_input: Column<Instance>,
@@ -60,7 +60,7 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
         // Create columns
         let selector = meta.selector();
         let selector_input = meta.selector();
-        let selector_output = meta.selector();
+        // let selector_output = meta.selector();
         let selector_not_output = meta.selector();
 
         let instance_input = meta.instance_column();
@@ -276,7 +276,7 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
             cols,
             selector,
             selector_input,
-            selector_output,
+            // selector_output,
             selector_not_output,
             _instance_input: instance_input,
             _instance_output: instance_output,
@@ -294,15 +294,15 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
             |mut region| {
                 for (i, input) in inputs.iter().enumerate() {
                     // Compute offset
-                    let offset = i * NUM_ROUNDS;
+                    let offset = i * NUM_LANES;
                     // Store values in local row
                     let mut row: [F; NUM_COLUMNS] = [F::ZERO; NUM_COLUMNS];
 
                     // Enable selectors
                     self.config.selector_input.enable(&mut region, offset)?;
-                    self.config
-                        .selector_output
-                        .enable(&mut region, offset + NUM_ROUNDS - 1)?;
+                    // self.config
+                    //     .selector_output
+                    //     .enable(&mut region, offset + NUM_ROUNDS - 1)?;
 
                     // Assign remaining rows
                     for round in 0..NUM_ROUNDS {
@@ -581,8 +581,6 @@ mod tests {
         let inputs_fr = inputs.map(|input| input.map(|x| Fr::from(x)));
         let expected_fr = expected.map(|output| output.map(|x| Fr::from(x)));
 
-        println!("inputs: {:?}", inputs_fr);
-
         let circuit = KeccakCircuit {
             inputs: inputs_fr.to_vec(),
         };
@@ -678,7 +676,7 @@ mod tests {
     #[cfg(feature = "pse-backend")]
     #[test]
     fn bench_keccak() {
-        const NUM_INPUTS: usize = 2;
+        const NUM_INPUTS: usize = 85;
         let k = (NUM_INPUTS * NUM_LANES)
             .next_power_of_two()
             .trailing_zeros();
