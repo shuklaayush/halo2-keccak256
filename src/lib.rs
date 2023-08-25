@@ -1,25 +1,27 @@
+#![feature(slice_flatten)]
+
 mod columns;
 mod constants;
+mod halo2_proofs_shim;
 mod logic;
 
+use crate::halo2_proofs_shim::{circuit::*, plonk::*, poly::Rotation};
 use ff::PrimeFieldBits;
-use halo2_proofs::{circuit::*, plonk::*, poly::Rotation};
 use std::marker::PhantomData;
 
 use columns::{
     reg_a, reg_a_prime, reg_a_prime_prime, reg_a_prime_prime_0_0_bit, reg_a_prime_prime_prime,
-    reg_b, reg_c, reg_c_prime, reg_output, reg_preimage, reg_step, NUM_COLUMNS,
+    reg_b, reg_c, reg_c_prime, reg_output, reg_step, NUM_COLUMNS,
 };
 use constants::{rc_value, rc_value_bit};
 use logic::{andn, andn_gen, xor, xor3_gen, xor_gen};
 // use columns::{NUM_COLUMNS};
 
 /// Number of rounds in a Keccak permutation.
-// pub(crate) const NUM_ROUNDS: usize = 24;
 pub(crate) const NUM_ROUNDS: usize = 24;
 
 /// Number of 64-bit elements in the Keccak permutation input.
-pub(crate) const NUM_INPUTS: usize = 25;
+pub(crate) const NUM_LANES: usize = 25;
 
 #[derive(Debug, Clone)]
 struct KeccakConfig {
@@ -27,13 +29,12 @@ struct KeccakConfig {
     // TODO: There's redundancy here, but it's not clear how to remove it.
     //       halo2 selector type is very restrictive.
     pub selector: Selector,
-    pub selector_first: Selector,
-    pub selector_last: Selector,
-    pub selector_not_last: Selector,
+    pub selector_input: Selector,
+    // pub selector_output: Selector,
+    pub selector_not_output: Selector,
 
-    pub instance_input: Column<Instance>,
-    pub instance_output: Column<Instance>,
-    // pub constant: Column<Fixed>,
+    pub _instance_input: Column<Instance>,
+    pub _instance_output: Column<Instance>,
 }
 
 #[derive(Debug, Clone)]
@@ -57,20 +58,13 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
 
     pub fn configure(meta: &mut ConstraintSystem<F>) -> KeccakConfig {
         // Create columns
-
         let selector = meta.selector();
-        let selector_first = meta.selector();
-        let selector_last = meta.selector();
-        let selector_not_last = meta.selector();
+        let selector_input = meta.selector();
+        // let selector_output = meta.selector();
+        let selector_not_output = meta.selector();
 
         let instance_input = meta.instance_column();
         let instance_output = meta.instance_column();
-        // let constant = meta.fixed_column();
-
-        // TODO: Remove all enable_equality
-        meta.enable_equality(instance_input);
-        meta.enable_equality(instance_output);
-        // meta.enable_constant(constant);
 
         let cols: [Column<Advice>; NUM_COLUMNS] = (0..NUM_COLUMNS)
             .map(|_| meta.advice_column())
@@ -78,50 +72,27 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
             .try_into()
             .unwrap();
 
-        for i in 0..NUM_INPUTS {
-            meta.enable_equality(cols[reg_output(i)]);
-        }
         // Assign constraints
 
         // First round flag
-        // TODO: Maybe use copy constraint instead of gate and selector
         meta.create_gate("first_round_flag", |meta| {
-            let s_first = meta.query_selector(selector_first);
+            let s_input = meta.query_selector(selector_input);
 
             let first_round_flag = meta.query_advice(cols[reg_step(0)], Rotation::cur());
-            vec![s_first * (first_round_flag - Expression::Constant(F::ONE))]
+            vec![s_input * (first_round_flag - Expression::Constant(F::ONE))]
         });
 
         // Round flags
         for i in 0..NUM_ROUNDS {
             // To initialize the first round flag, we need to set it to 1
-            meta.enable_equality(cols[reg_step(i)]);
-
             meta.create_gate("round_flags", |meta| {
-                let s_not_last = meta.query_selector(selector_not_last);
+                let s_not_output = meta.query_selector(selector_not_output);
 
                 let current_round_flag = meta.query_advice(cols[reg_step(i)], Rotation::cur());
                 let next_round_flag =
                     meta.query_advice(cols[reg_step((i + 1) % NUM_ROUNDS)], Rotation::next());
-                vec![s_not_last * (next_round_flag - current_round_flag)]
+                vec![s_not_output * (next_round_flag - current_round_flag)]
             });
-        }
-
-        // Preimages
-        for x in 0..5 {
-            for y in 0..5 {
-                // To initialize the first preimage, we need to set it to the input
-                meta.enable_equality(cols[reg_preimage(x, y)]);
-
-                meta.create_gate("preimage", |meta| {
-                    let s_not_last = meta.query_selector(selector_not_last);
-
-                    let preimage = reg_preimage(x, y);
-                    let diff = meta.query_advice(cols[preimage], Rotation::cur())
-                        - meta.query_advice(cols[preimage], Rotation::next());
-                    vec![s_not_last * diff]
-                });
-            }
         }
 
         // C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1]).
@@ -262,20 +233,41 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
             vec![s * (a_prime_prime_prime_0_0 - computed)]
         });
 
-        // Copying A'' to A for next round
+        // Round input A
         for x in 0..5 {
             for y in 0..5 {
                 // To initialize the first A, we need to set it to the input
-                meta.enable_equality(cols[reg_a(x, y)]);
+                meta.create_gate("a first", |meta| {
+                    let s_input = meta.query_selector(selector_input);
 
+                    let a = meta.query_advice(cols[reg_a(x, y)], Rotation::cur());
+                    let input = meta.query_instance(instance_input, Rotation((y * 5 + x) as i32));
+
+                    vec![s_input * (input - a)]
+                });
+
+                // Copying A'' to A for next round
                 meta.create_gate("a", |meta| {
-                    let s_not_last = meta.query_selector(selector_not_last);
+                    let s_not_output = meta.query_selector(selector_not_output);
 
                     let output =
                         meta.query_advice(cols[reg_a_prime_prime_prime(x, y)], Rotation::cur());
                     let input = meta.query_advice(cols[reg_a(x, y)], Rotation::next());
 
-                    vec![s_not_last * (output - input)]
+                    vec![s_not_output * (output - input)]
+                });
+            }
+
+            // Output
+            // TODO: Use selector_output
+            for i in 0..NUM_LANES {
+                meta.create_gate("output", |meta| {
+                    let s_input = meta.query_selector(selector_input);
+
+                    let output =
+                        meta.query_advice(cols[reg_output(i)], Rotation((NUM_ROUNDS - 1) as i32));
+                    let expected = meta.query_instance(instance_output, Rotation(i as i32));
+                    vec![s_input * (output - expected)]
                 });
             }
         }
@@ -283,296 +275,210 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
         KeccakConfig {
             cols,
             selector,
-            selector_first,
-            selector_last,
-            selector_not_last,
-            instance_input,
-            instance_output,
-            // constant,
+            selector_input,
+            // selector_output,
+            selector_not_output,
+            _instance_input: instance_input,
+            _instance_output: instance_output,
         }
     }
 
-    pub fn assign(&self, mut layouter: impl Layouter<F>) -> Result<Vec<Cell>, Error> {
+    pub fn assign(
+        &self,
+        mut layouter: impl Layouter<F>,
+        inputs: &[[F; NUM_LANES]],
+    ) -> Result<(), Error> {
+        // TODO: Different chips for each input/output? Can they share gates?
         layouter.assign_region(
             || "keccak table",
             |mut region| {
-                // Store values in local row
-                let mut row: [F; NUM_COLUMNS] = [F::ZERO; NUM_COLUMNS];
+                for (i, input) in inputs.iter().enumerate() {
+                    // Compute offset
+                    let offset = i * NUM_LANES;
+                    // Store values in local row
+                    let mut row: [F; NUM_COLUMNS] = [F::ZERO; NUM_COLUMNS];
 
-                // Enable selectors
-                self.config.selector_first.enable(&mut region, 0)?;
-                self.config
-                    .selector_last
-                    .enable(&mut region, NUM_ROUNDS - 1)?;
+                    // Enable selectors
+                    self.config.selector_input.enable(&mut region, offset)?;
+                    // self.config
+                    //     .selector_output
+                    //     .enable(&mut region, offset + NUM_ROUNDS - 1)?;
 
-                // TODO: Maybe only store on last row
-                let mut cells = vec![];
+                    // Assign remaining rows
+                    for round in 0..NUM_ROUNDS {
+                        let round_offset = offset + round;
+                        self.config.selector.enable(&mut region, round_offset)?;
 
-                // Assign remaining rows
-                for round in 0..NUM_ROUNDS {
-                    cells = Vec::new();
+                        if round < NUM_ROUNDS - 1 {
+                            // Enable selector
+                            self.config
+                                .selector_not_output
+                                .enable(&mut region, round_offset)?;
+                        }
 
-                    self.config.selector.enable(&mut region, round)?;
+                        // Assign round flags
+                        for i in 0..NUM_ROUNDS {
+                            let val = if i == round { F::ONE } else { F::ZERO };
+                            region.assign_advice(
+                                || "advice",
+                                self.config.cols[reg_step(i)],
+                                round_offset,
+                                || Value::known(val),
+                            )?;
+                            row[reg_step(i)] = val;
+                        }
 
-                    if round < NUM_ROUNDS - 1 {
-                        // Enable selector
-                        self.config.selector_not_last.enable(&mut region, round)?;
-                    }
-
-                    // Assign round flags
-                    for i in 0..NUM_ROUNDS {
-                        let val = if i == round { F::ONE } else { F::ZERO };
-                        cells.push(
-                            region
-                                .assign_advice(
-                                    || "advice",
-                                    self.config.cols[reg_step(i)],
-                                    round,
-                                    || Value::known(val),
-                                )?
-                                .cell(),
-                        );
-                        row[reg_step(i)] = val;
-                    }
-
-                    if round == 0 {
-                        // Populate the preimage for first row.
+                        // Populate A
                         for x in 0..5 {
                             for y in 0..5 {
-                                let preimage = reg_preimage(x, y);
-                                let cell = region.assign_advice_from_instance(
-                                    || "preimage",
-                                    self.config.instance_input,
-                                    y * 5 + x,
-                                    self.config.cols[preimage],
-                                    0,
+                                let a = reg_a(x, y);
+                                let val = if round == 0 {
+                                    // First round, assign input
+                                    input[y * 5 + x]
+                                } else {
+                                    // Copy output from previous round
+                                    row[reg_a_prime_prime_prime(x, y)]
+                                };
+                                region.assign_advice(
+                                    || "a",
+                                    self.config.cols[a],
+                                    round_offset, // offset
+                                    || Value::known(val),
                                 )?;
-                                cells.push(cell.cell());
-                                let value: PubValue<F> =
-                                    unsafe { std::mem::transmute_copy(&cell.value().copied()) };
-                                if let Some(v) = value.inner {
-                                    row[preimage] = v;
+                                row[a] = val;
+                            }
+                        }
+
+                        // Populate C[x] = xor(A[x, 0], A[x, 1], A[x, 2], A[x, 3], A[x, 4]).
+                        for x in 0..5 {
+                            for z in 0..64 {
+                                let xor = xor(&(0..5)
+                                    .map(|i| {
+                                        let ai = row[reg_a(x, i)];
+                                        let bits = ai.to_le_bits();
+
+                                        F::from(bits[z] as u64)
+                                    })
+                                    .collect::<Vec<_>>());
+                                region.assign_advice(
+                                    || "c",
+                                    self.config.cols[reg_c(x, z)],
+                                    round_offset,
+                                    || Value::known(xor),
+                                )?;
+                                row[reg_c(x, z)] = xor;
+                            }
+                        }
+
+                        // Populate C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1]).
+                        for x in 0..5 {
+                            for z in 0..64 {
+                                let xor = xor(&[
+                                    row[reg_c(x, z)],
+                                    row[reg_c((x + 4) % 5, z)],
+                                    row[reg_c((x + 1) % 5, (z + 63) % 64)],
+                                ]);
+                                region.assign_advice(
+                                    || "c_prime",
+                                    self.config.cols[reg_c_prime(x, z)],
+                                    round_offset,
+                                    || Value::known(xor),
+                                )?;
+                                row[reg_c_prime(x, z)] = xor;
+                            }
+                        }
+
+                        // Populate A'. To avoid shifting indices, we rewrite
+                        //     A'[x, y, z] = xor(A[x, y, z], C[x - 1, z], C[x + 1, z - 1])
+                        // as
+                        //     A'[x, y, z] = xor(A[x, y, z], C[x, z], C'[x, z]).
+                        for x in 0..5 {
+                            for y in 0..5 {
+                                for z in 0..64 {
+                                    let a_bit = F::from(row[reg_a(x, y)].to_le_bits()[z] as u64);
+                                    let xor =
+                                        xor(&[a_bit, row[reg_c(x, z)], row[reg_c_prime(x, z)]]);
+                                    region.assign_advice(
+                                        || "a_prime",
+                                        self.config.cols[reg_a_prime(x, y, z)],
+                                        round_offset,
+                                        || Value::known(xor),
+                                    )?;
+                                    row[reg_a_prime(x, y, z)] = xor;
                                 }
                             }
                         }
 
-                        // Populate A for first row.
+                        // Populate A''.
+                        // A''[x, y] = xor(B[x, y], andn(B[x + 1, y], B[x + 2, y])).
                         for x in 0..5 {
                             for y in 0..5 {
-                                let a = reg_a(x, y);
-                                cells.push(
-                                    region
-                                        .assign_advice_from_instance(
-                                            || "a",
-                                            self.config.instance_input,
-                                            y * 5 + x,
-                                            self.config.cols[a],
-                                            0,
-                                        )?
-                                        .cell(),
-                                );
-                                row[a] = row[reg_preimage(x, y)];
-                            }
-                        }
-                    } else {
-                        // Assign preimage
-                        for x in 0..5 {
-                            for y in 0..5 {
-                                let preimage = reg_preimage(x, y);
-                                cells.push(
-                                    region
-                                        .assign_advice(
-                                            || "preimage",
-                                            self.config.cols[preimage],
-                                            round,
-                                            || Value::known(row[preimage]),
-                                        )?
-                                        .cell(),
-                                );
-                            }
-                        }
+                                let get_bit = |z| {
+                                    xor(&[
+                                        row[reg_b(x, y, z)],
+                                        andn(
+                                            row[reg_b((x + 1) % 5, y, z)],
+                                            row[reg_b((x + 2) % 5, y, z)],
+                                        ),
+                                    ])
+                                };
 
-                        // Assign A
-                        for x in 0..5 {
-                            for y in 0..5 {
-                                let input = reg_a(x, y);
-                                let output = reg_a_prime_prime_prime(x, y);
-                                cells.push(
-                                    region
-                                        .assign_advice(
-                                            || "a",
-                                            self.config.cols[input],
-                                            round,
-                                            || Value::known(row[output]),
-                                        )?
-                                        .cell(),
-                                );
-                                row[input] = row[output];
-                            }
-                        }
-                    }
+                                let val = (0..64)
+                                    .rev()
+                                    .fold(F::ZERO, |acc, z| F::from(2) * acc + get_bit(z));
 
-                    // Populate C[x] = xor(A[x, 0], A[x, 1], A[x, 2], A[x, 3], A[x, 4]).
-                    for x in 0..5 {
-                        for z in 0..64 {
-                            let xor = xor(&(0..5)
-                                .map(|i| {
-                                    let ai = row[reg_a(x, i)];
-                                    let bits = ai.to_le_bits();
-
-                                    F::from(bits[z] as u64)
-                                })
-                                .collect::<Vec<_>>());
-                            cells.push(
-                                region
-                                    .assign_advice(
-                                        || "c",
-                                        self.config.cols[reg_c(x, z)],
-                                        round,
-                                        || Value::known(xor),
-                                    )?
-                                    .cell(),
-                            );
-                            row[reg_c(x, z)] = xor;
-                        }
-                    }
-
-                    // Populate C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1]).
-                    for x in 0..5 {
-                        for z in 0..64 {
-                            let xor = xor(&[
-                                row[reg_c(x, z)],
-                                row[reg_c((x + 4) % 5, z)],
-                                row[reg_c((x + 1) % 5, (z + 63) % 64)],
-                            ]);
-                            cells.push(
-                                region
-                                    .assign_advice(
-                                        || "c_prime",
-                                        self.config.cols[reg_c_prime(x, z)],
-                                        round,
-                                        || Value::known(xor),
-                                    )?
-                                    .cell(),
-                            );
-                            row[reg_c_prime(x, z)] = xor;
-                        }
-                    }
-
-                    // Populate A'. To avoid shifting indices, we rewrite
-                    //     A'[x, y, z] = xor(A[x, y, z], C[x - 1, z], C[x + 1, z - 1])
-                    // as
-                    //     A'[x, y, z] = xor(A[x, y, z], C[x, z], C'[x, z]).
-                    for x in 0..5 {
-                        for y in 0..5 {
-                            for z in 0..64 {
-                                let a_bit = F::from(row[reg_a(x, y)].to_le_bits()[z] as u64);
-                                let xor = xor(&[a_bit, row[reg_c(x, z)], row[reg_c_prime(x, z)]]);
-                                cells.push(
-                                    region
-                                        .assign_advice(
-                                            || "a_prime",
-                                            self.config.cols[reg_a_prime(x, y, z)],
-                                            round,
-                                            || Value::known(xor),
-                                        )?
-                                        .cell(),
-                                );
-                                row[reg_a_prime(x, y, z)] = xor;
-                            }
-                        }
-                    }
-
-                    // Populate A''.
-                    // A''[x, y] = xor(B[x, y], andn(B[x + 1, y], B[x + 2, y])).
-                    for x in 0..5 {
-                        for y in 0..5 {
-                            let get_bit = |z| {
-                                xor(&[
-                                    row[reg_b(x, y, z)],
-                                    andn(
-                                        row[reg_b((x + 1) % 5, y, z)],
-                                        row[reg_b((x + 2) % 5, y, z)],
-                                    ),
-                                ])
-                            };
-
-                            let val = (0..64)
-                                .rev()
-                                .fold(F::ZERO, |acc, z| F::from(2) * acc + get_bit(z));
-
-                            cells.push(
-                                region
-                                    .assign_advice(
-                                        || "a_prime_prime",
-                                        self.config.cols[reg_a_prime_prime(x, y)],
-                                        round,
-                                        || Value::known(val),
-                                    )?
-                                    .cell(),
-                            );
-                            row[reg_a_prime_prime(x, y)] = val;
-                        }
-                    }
-
-                    // For the XOR, we split A''[0, 0] to bits.
-                    let a_prime_prime_0_0_bits = row[reg_a_prime_prime(0, 0)].to_le_bits();
-
-                    for i in 0..64 {
-                        let val = F::from(a_prime_prime_0_0_bits[i] as u64);
-                        cells.push(
-                            region
-                                .assign_advice(
-                                    || "a_prime_prime_0_0",
-                                    self.config.cols[reg_a_prime_prime_0_0_bit(i)],
-                                    round,
+                                region.assign_advice(
+                                    || "a_prime_prime",
+                                    self.config.cols[reg_a_prime_prime(x, y)],
+                                    round_offset,
                                     || Value::known(val),
-                                )?
-                                .cell(),
-                        );
-                        row[reg_a_prime_prime_0_0_bit(i)] = val;
-                    }
+                                )?;
+                                row[reg_a_prime_prime(x, y)] = val;
+                            }
+                        }
 
-                    // A''[0, 0] is additionally xor'd with RC.
-                    let val = F::from(
-                        a_prime_prime_0_0_bits
-                            .iter()
-                            .rev()
-                            .fold(0u64, |acc, b| (acc << 1) + (*b as u64))
-                            ^ rc_value(round),
-                    );
-                    cells.push(
-                        region
-                            .assign_advice(
-                                || "a_prime_prime_prime_0_0",
-                                self.config.cols[reg_a_prime_prime_prime(0, 0)],
-                                round,
+                        // For the XOR, we split A''[0, 0] to bits.
+                        let a_prime_prime_0_0_bits = row[reg_a_prime_prime(0, 0)].to_le_bits();
+
+                        for i in 0..64 {
+                            let val = F::from(a_prime_prime_0_0_bits[i] as u64);
+                            region.assign_advice(
+                                || "a_prime_prime_0_0",
+                                self.config.cols[reg_a_prime_prime_0_0_bit(i)],
+                                round_offset,
                                 || Value::known(val),
-                            )?
-                            .cell(),
-                    );
-                    row[reg_a_prime_prime_prime(0, 0)] = val;
+                            )?;
+                            row[reg_a_prime_prime_0_0_bit(i)] = val;
+                        }
+
+                        // A''[0, 0] is additionally xor'd with RC.
+                        let val = F::from(
+                            a_prime_prime_0_0_bits
+                                .iter()
+                                .rev()
+                                .fold(0u64, |acc, b| (acc << 1) + (*b as u64))
+                                ^ rc_value(round),
+                        );
+                        region.assign_advice(
+                            || "a_prime_prime_prime_0_0",
+                            self.config.cols[reg_a_prime_prime_prime(0, 0)],
+                            round_offset,
+                            || Value::known(val),
+                        )?;
+                        row[reg_a_prime_prime_prime(0, 0)] = val;
+                    }
                 }
 
-                Ok((0..NUM_INPUTS).map(|i| cells[reg_output(i)]).collect())
+                Ok(())
             },
         )
-    }
-
-    pub fn expose_public(
-        &self,
-        mut layouter: impl Layouter<F>,
-        cells: &[Cell],
-    ) -> Result<(), Error> {
-        for i in 0..NUM_INPUTS {
-            layouter.constrain_instance(cells[i], self.config.instance_output, i)?;
-        }
-        Ok(())
     }
 }
 
 #[derive(Default)]
-struct KeccakCircuit<F>(PhantomData<F>);
+struct KeccakCircuit<F> {
+    inputs: Vec<[F; NUM_LANES]>,
+}
 
 impl<F: PrimeFieldBits> Circuit<F> for KeccakCircuit<F> {
     type Config = KeccakConfig;
@@ -593,8 +499,7 @@ impl<F: PrimeFieldBits> Circuit<F> for KeccakCircuit<F> {
     ) -> Result<(), Error> {
         let chip = KeccakChip::construct(config);
 
-        let output_cells = chip.assign(layouter.namespace(|| "table"))?;
-        chip.expose_public(layouter, &output_cells)?;
+        chip.assign(layouter.namespace(|| "table"), &self.inputs)?;
 
         Ok(())
     }
@@ -604,12 +509,13 @@ impl<F: PrimeFieldBits> Circuit<F> for KeccakCircuit<F> {
 mod tests {
     use super::*;
 
-    use std::marker::PhantomData;
+    use halo2_proofs_shim::dev::MockProver;
     use tiny_keccak::keccakf;
 
+    #[cfg(feature = "pse-backend")]
     use ark_std::{end_timer, start_timer};
-    use halo2_proofs::{
-        dev::MockProver,
+    #[cfg(feature = "pse-backend")]
+    use halo2_proofs_shim::{
         halo2curves::bn256::{Bn256, Fr, G1Affine},
         poly::{
             commitment::ParamsProver,
@@ -623,47 +529,81 @@ mod tests {
             Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
         },
     };
+    #[cfg(feature = "pse-backend")]
     use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
+    #[cfg(feature = "pse-backend")]
     use rand_core::OsRng;
+
+    #[cfg(feature = "zcash-backend")]
+    use halo2curves::bn256::Fr;
 
     #[test]
     fn test_keccak_correctness() {
-        let k = 6;
+        let k = NUM_LANES.next_power_of_two().trailing_zeros();
 
-        let circuit = KeccakCircuit(PhantomData);
-
-        let input: [u64; NUM_INPUTS] = rand::random();
-        // let input = [0u64; NUM_INPUTS];
-
+        let input: [u64; NUM_LANES] = rand::random();
         let expected = {
             let mut state = input;
             keccakf(&mut state);
             state
+        };
+        let circuit = KeccakCircuit {
+            inputs: vec![input.map(|x| Fr::from(x))],
         };
 
         let public_inputs = vec![
             input.map(|x| Fr::from(x)).to_vec(),
             expected.map(|x| Fr::from(x)).to_vec(),
         ];
-        // println!("public_input: {:?}", public_input);
 
         let prover = MockProver::run(k, &circuit, public_inputs).unwrap();
         prover.assert_satisfied();
     }
 
     #[test]
+    fn test_multiple_keccak_correctness() {
+        const NUM_INPUTS: usize = 2;
+        let k = (NUM_INPUTS * NUM_LANES)
+            .next_power_of_two()
+            .trailing_zeros();
+
+        let inputs: [[u64; NUM_LANES]; NUM_INPUTS] = (0..NUM_INPUTS)
+            .map(|_| rand::random())
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let expected: [[u64; NUM_LANES]; NUM_INPUTS] = inputs.map(|input| {
+            let mut state = input;
+            keccakf(&mut state);
+            state
+        });
+
+        let inputs_fr = inputs.map(|input| input.map(|x| Fr::from(x)));
+        let expected_fr = expected.map(|output| output.map(|x| Fr::from(x)));
+
+        let circuit = KeccakCircuit {
+            inputs: inputs_fr.to_vec(),
+        };
+
+        let public_inputs = vec![inputs_fr.flatten().to_vec(), expected_fr.flatten().to_vec()];
+        let prover = MockProver::run(k, &circuit, public_inputs).unwrap();
+        prover.assert_satisfied();
+    }
+
+    #[cfg(feature = "pse-backend")]
+    #[test]
     fn test_keccak_proof() {
-        let k = 6;
+        let k = NUM_LANES.next_power_of_two().trailing_zeros();
 
-        let circuit = KeccakCircuit(PhantomData);
-
-        // let input: [u64; NUM_INPUTS] = rand::random();
-        let input = [0u64; NUM_INPUTS];
-
+        let input: [u64; NUM_LANES] = rand::random();
         let expected = {
             let mut state = input;
             keccakf(&mut state);
             state
+        };
+
+        let circuit = KeccakCircuit {
+            inputs: vec![input.map(|x| Fr::from(x))],
         };
 
         let public_inputs = vec![
@@ -733,17 +673,108 @@ mod tests {
         println!("proof_size: {} bytes", proof_size);
     }
 
-    #[cfg(feature = "dev-graph")]
+    #[cfg(feature = "pse-backend")]
     #[test]
-    fn plot_keccak1() {
+    fn bench_keccak() {
+        const NUM_INPUTS: usize = 85;
+        let k = (NUM_INPUTS * NUM_LANES)
+            .next_power_of_two()
+            .trailing_zeros();
+
+        let inputs: [[u64; NUM_LANES]; NUM_INPUTS] = (0..NUM_INPUTS)
+            .map(|_| rand::random())
+            .collect::<Vec<_>>()
+            .try_into()
+            .unwrap();
+        let expected: [[u64; NUM_LANES]; NUM_INPUTS] = inputs.map(|input| {
+            let mut state = input;
+            keccakf(&mut state);
+            state
+        });
+
+        let inputs_fr = inputs.map(|input| input.map(|x| Fr::from(x)));
+        let expected_fr = expected.map(|output| output.map(|x| Fr::from(x)));
+
+        let circuit = KeccakCircuit {
+            inputs: inputs_fr.to_vec(),
+        };
+
+        let public_inputs = vec![inputs_fr.flatten(), expected_fr.flatten()];
+        let instance = public_inputs.iter().map(|&v| v).collect::<Vec<_>>();
+
+        // Generate proof
+        let srs_params = ParamsKZG::<Bn256>::setup(k, ChaCha20Rng::from_seed(Default::default()));
+        let mut rng = OsRng;
+
+        let vk_time = start_timer!(|| "Generating vkey");
+        let vk = keygen_vk(&srs_params, &circuit).unwrap();
+        end_timer!(vk_time);
+
+        let pk_time = start_timer!(|| "Generating pkey");
+        let pk = keygen_pk(&srs_params, vk, &circuit).unwrap();
+        end_timer!(pk_time);
+
+        let proof_time = start_timer!(|| "Proving time");
+        let mut transcript = Blake2bWrite::<_, _, Challenge255<_>>::init(vec![]);
+        create_proof::<
+            KZGCommitmentScheme<Bn256>,
+            ProverSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            _,
+            Blake2bWrite<Vec<u8>, G1Affine, Challenge255<G1Affine>>,
+            _,
+        >(
+            &srs_params,
+            &pk,
+            &[circuit],
+            &[&instance.as_slice()],
+            &mut rng,
+            &mut transcript,
+        )
+        .unwrap();
+        let proof = transcript.finalize();
+        end_timer!(proof_time);
+
+        let proof_size = proof.len();
+
+        let verify_time = start_timer!(|| "Verify time");
+        let verifier_params = srs_params.verifier_params();
+        let strategy = SingleStrategy::new(&srs_params);
+        let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
+        verify_proof::<
+            KZGCommitmentScheme<Bn256>,
+            VerifierSHPLONK<'_, Bn256>,
+            Challenge255<G1Affine>,
+            Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
+            SingleStrategy<'_, Bn256>,
+        >(
+            verifier_params,
+            pk.get_vk(),
+            strategy,
+            &[&instance.as_slice()],
+            &mut transcript,
+        )
+        .unwrap();
+        end_timer!(verify_time);
+
+        println!("proof_size: {} bytes", proof_size);
+    }
+
+    // TODO: Fix this to run for all backends
+    #[cfg(all(feature = "dev-graph", feature = "pse-backend"))]
+    #[test]
+    fn plot_keccak() {
         use plotters::prelude::*;
 
         let root = BitMapBackend::new("keccak-layout.png", (1024, 3096)).into_drawing_area();
         root.fill(&WHITE).unwrap();
         let root = root.titled("Keccak Layout", ("sans-serif", 60)).unwrap();
 
-        let circuit = KeccakCircuit::<Fr>(PhantomData);
-        halo2_proofs::dev::CircuitLayout::default()
+        let circuit = KeccakCircuit {
+            inputs: vec![[Fr::default(); NUM_LANES]],
+        };
+
+        halo2_proofs_shim::dev::CircuitLayout::default()
             .render(5, &circuit, &root)
             .unwrap();
     }

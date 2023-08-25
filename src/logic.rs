@@ -1,5 +1,5 @@
+use crate::halo2_proofs_shim::plonk::Expression;
 use ff::PrimeField;
-use halo2_proofs::plonk::Expression;
 
 pub(crate) fn xor<F: PrimeField>(xs: &[F]) -> F {
     xs.into_iter().fold(F::ZERO, |acc, &x| {
