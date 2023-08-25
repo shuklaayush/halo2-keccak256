@@ -524,8 +524,12 @@ impl<F: PrimeFieldBits> Circuit<F> for KeccakCircuit<F> {
 mod tests {
     use super::*;
 
-    use halo2_proofs_shim::dev::MockProver;
     use tiny_keccak::keccakf;
+
+    #[cfg(feature = "zcash-backend")]
+    use halo2_proofs_shim::dev::MockProver;
+    #[cfg(feature = "zcash-backend")]
+    use halo2curves::bn256::Fr;
 
     #[cfg(any(feature = "pse-backend", feature = "axiom-backend"))]
     use ark_std::{end_timer, start_timer};
@@ -550,8 +554,6 @@ mod tests {
     use rand_core::OsRng;
 
     #[cfg(feature = "zcash-backend")]
-    use halo2curves::bn256::Fr;
-
     #[test]
     fn test_keccak_correctness() {
         let k = NUM_LANES.next_power_of_two().trailing_zeros();
@@ -575,6 +577,7 @@ mod tests {
         prover.assert_satisfied();
     }
 
+    #[cfg(feature = "zcash-backend")]
     #[test]
     fn test_multiple_keccak_correctness() {
         const NUM_INPUTS: usize = 2;
