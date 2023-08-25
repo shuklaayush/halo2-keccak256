@@ -514,7 +514,6 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
 #[derive(Default)]
 struct KeccakCircuit<F> {
     input: [F; NUM_INPUTS],
-    _marker: PhantomData<F>,
 }
 
 impl<F: PrimeFieldBits> Circuit<F> for KeccakCircuit<F> {
@@ -546,8 +545,6 @@ impl<F: PrimeFieldBits> Circuit<F> for KeccakCircuit<F> {
 mod tests {
     use super::*;
 
-    use ff::Field;
-    use std::marker::PhantomData;
     use tiny_keccak::keccakf;
 
     use ark_std::{end_timer, start_timer};
@@ -581,7 +578,6 @@ mod tests {
         };
         let circuit = KeccakCircuit {
             input: input.map(|x| Fr::from(x)),
-            _marker: PhantomData,
         };
 
         let public_inputs = vec![
@@ -607,7 +603,6 @@ mod tests {
 
         let circuit = KeccakCircuit {
             input: input.map(|x| Fr::from(x)),
-            _marker: PhantomData,
         };
 
         let public_inputs = vec![
@@ -687,8 +682,7 @@ mod tests {
         let root = root.titled("Keccak Layout", ("sans-serif", 60)).unwrap();
 
         let circuit = KeccakCircuit {
-            input: [Fr::ZERO; NUM_INPUTS],
-            _marker: PhantomData,
+            input: [Fr::default(); NUM_INPUTS],
         };
 
         halo2_proofs::dev::CircuitLayout::default()
