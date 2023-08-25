@@ -2,10 +2,11 @@
 
 mod columns;
 mod constants;
+mod halo2_proofs_shim;
 mod logic;
 
+use crate::halo2_proofs_shim::{circuit::*, plonk::*, poly::Rotation};
 use ff::PrimeFieldBits;
-use halo2_proofs::{circuit::*, plonk::*, poly::Rotation};
 use std::marker::PhantomData;
 
 use columns::{
@@ -521,8 +522,12 @@ mod tests {
     use tiny_keccak::keccakf;
 
     use ark_std::{end_timer, start_timer};
-    use halo2_proofs::{
-        dev::MockProver,
+    use halo2_proofs_shim::dev::MockProver;
+    use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
+    use rand_core::OsRng;
+
+    #[cfg(feature = "pse-backend")]
+    use halo2_proofs_shim::{
         halo2curves::bn256::{Bn256, Fr, G1Affine},
         poly::{
             commitment::ParamsProver,
@@ -536,8 +541,8 @@ mod tests {
             Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
         },
     };
-    use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
-    use rand_core::OsRng;
+    #[cfg(feature = "zcash-backend")]
+    use halo2curves::bn256::Fr;
 
     #[test]
     fn test_keccak_correctness() {
@@ -592,6 +597,7 @@ mod tests {
         prover.assert_satisfied();
     }
 
+    #[cfg(feature = "pse-backend")]
     #[test]
     fn test_keccak_proof() {
         let k = NUM_LANES.next_power_of_two().trailing_zeros();
@@ -674,6 +680,7 @@ mod tests {
         println!("proof_size: {} bytes", proof_size);
     }
 
+    #[cfg(feature = "pse-backend")]
     #[test]
     fn bench_keccak() {
         const NUM_INPUTS: usize = 2;
@@ -760,7 +767,8 @@ mod tests {
         println!("proof_size: {} bytes", proof_size);
     }
 
-    #[cfg(feature = "dev-graph")]
+    // TODO: Fix this to run for all backends
+    #[cfg(all(feature = "dev-graph", feature = "pse-backend"))]
     #[test]
     fn plot_keccak() {
         use plotters::prelude::*;
@@ -773,7 +781,7 @@ mod tests {
             inputs: vec![[Fr::default(); NUM_LANES]],
         };
 
-        halo2_proofs::dev::CircuitLayout::default()
+        halo2_proofs_shim::dev::CircuitLayout::default()
             .render(5, &circuit, &root)
             .unwrap();
     }
