@@ -18,14 +18,16 @@ cargo t -r -- --nocapture bench_keccak
 
 ## Profiling
 
+### Single-threaded:
+
 ```bash
-sudo --preserve-env cargo flamegraph  --unit-test -- bench_keccak
+RAYON_NUM_THREADS=1 sudo --preserve-env cargo flamegraph  --output profile/flamegraph-single.svg --unit-test -- bench_keccak
 ```
 
-Single threaded:
+### Multi-threaded:
 
 ```bash
-RAYON_NUM_THREADS=1 sudo --preserve-env cargo flamegraph  --unit-test -- bench_keccak
+sudo --preserve-env cargo flamegraph  --output profile/flamegraph.svg --unit-test -- bench_keccak
 ```
 
 ## Using different halo2 backends
