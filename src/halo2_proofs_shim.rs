@@ -1,7 +1,19 @@
-#[cfg(all(feature = "pse-backend", feature = "zcash-backend"))]
-compile_error!(
-    "feature \"pse-backend\" and feature \"zcash-backend\" cannot be enabled at the same time"
-);
+#[cfg(all(
+    not(feature = "axiom-backend"),
+    not(feature = "pse-backend"),
+    not(feature = "zcash-backend")
+))]
+compile_error!("one backend must be enabled");
+
+#[cfg(any(
+    all(feature = "axiom-backend", feature = "pse-backend",),
+    all(feature = "axiom-backend", feature = "zcash-backend"),
+    all(feature = "pse-backend", feature = "zcash-backend"),
+))]
+compile_error!("only one backend cannot be enabled at a time");
+
+#[cfg(feature = "axiom-backend")]
+pub use halo2_proofs_axiom::*;
 
 #[cfg(feature = "pse-backend")]
 pub use halo2_proofs_pse::*;

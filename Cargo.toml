@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["pse-backend"]
+default = ["axiom-backend", "jemallocator"]
+axiom-backend = ["halo2_proofs_axiom"]
 pse-backend = ["halo2_proofs_pse"]
 zcash-backend = ["halo2_proofs_zcash"]
 dev-graph = ["halo2_proofs_pse/dev-graph", "plotters"]
@@ -14,8 +15,13 @@ ff = "0.13.0"
 plotters = { version = "0.3.0", optional = true }
 tabbycat = { version = "0.1", features = ["attributes"], optional = true }
 
+halo2_proofs_axiom = { package = "halo2_proofs", git = "https://github.com/axiom-crypto/halo2.git", optional = true }
 halo2_proofs_pse = { package = "halo2_proofs", git = "https://github.com/privacy-scaling-explorations/halo2.git", optional = true }
 halo2_proofs_zcash = { package = "halo2_proofs", git = "https://github.com/zcash/halo2.git", optional = true }
+
+# memory allocation
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+jemallocator = { version = "0.5", optional = true }
 
 [dev-dependencies]
 ark-std = { version = "0.4.0", features = ["print-trace"] }
@@ -30,3 +36,4 @@ debug = true
 
 # [patch."https://github.com/privacy-scaling-explorations/halo2"]
 # halo2_proofs_pse = { package = "halo2_proofs", path = "../halo2/halo2_proofs" }
+# halo2_proofs_pse = { package = "halo2_proofs", git = "https://github.com/shuklaayush/halo2.git", branch = "feat/axiom-msm-optimization" }
