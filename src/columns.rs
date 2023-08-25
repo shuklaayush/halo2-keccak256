@@ -27,15 +27,7 @@ const R: [[u8; 5]; 5] = [
     [27, 20, 39, 8, 14],
 ];
 
-const START_PREIMAGE: usize = NUM_ROUNDS;
-/// Registers to hold the original input to a permutation, i.e. the input to the first round.
-pub(crate) const fn reg_preimage(x: usize, y: usize) -> usize {
-    debug_assert!(x < 5);
-    debug_assert!(y < 5);
-    START_PREIMAGE + (x * 5 + y)
-}
-
-const START_A: usize = START_PREIMAGE + 5 * 5;
+const START_A: usize = NUM_ROUNDS;
 pub(crate) const fn reg_a(x: usize, y: usize) -> usize {
     debug_assert!(x < 5);
     debug_assert!(y < 5);

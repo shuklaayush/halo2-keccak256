@@ -8,7 +8,7 @@ use std::marker::PhantomData;
 
 use columns::{
     reg_a, reg_a_prime, reg_a_prime_prime, reg_a_prime_prime_0_0_bit, reg_a_prime_prime_prime,
-    reg_b, reg_c, reg_c_prime, reg_output, reg_preimage, reg_step, NUM_COLUMNS,
+    reg_b, reg_c, reg_c_prime, reg_output, reg_step, NUM_COLUMNS,
 };
 use constants::{rc_value, rc_value_bit};
 use logic::{andn, andn_gen, xor, xor3_gen, xor_gen};
@@ -91,30 +91,6 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                     meta.query_advice(cols[reg_step((i + 1) % NUM_ROUNDS)], Rotation::next());
                 vec![s_not_last * (next_round_flag - current_round_flag)]
             });
-        }
-
-        // Preimages
-        for x in 0..5 {
-            for y in 0..5 {
-                // To initialize the first preimage, we need to set it to the input
-                meta.create_gate("preimage first", |meta| {
-                    let s_first = meta.query_selector(selector_first);
-
-                    let preimage = meta.query_advice(cols[reg_preimage(x, y)], Rotation::cur());
-                    let input = meta.query_instance(instance_input, Rotation((y * 5 + x) as i32));
-                    vec![s_first * (input - preimage)]
-                });
-
-                // Copy remaining preimages
-                meta.create_gate("preimage", |meta| {
-                    let s_not_last = meta.query_selector(selector_not_last);
-
-                    let preimage = reg_preimage(x, y);
-                    let diff = meta.query_advice(cols[preimage], Rotation::cur())
-                        - meta.query_advice(cols[preimage], Rotation::next());
-                    vec![s_not_last * diff]
-                });
-            }
         }
 
         // C'[x, z] = xor(C[x, z], C[x - 1, z], C[x + 1, z - 1]).
@@ -348,7 +324,7 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                             for y in 0..5 {
                                 let a = reg_a(x, y);
                                 region.assign_advice(
-                                    || "preimage",
+                                    || "a",
                                     self.config.cols[a],
                                     0,
                                     || Value::known(input[y * 5 + x]),
@@ -370,20 +346,6 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                                 )?;
                                 row[input] = row[output];
                             }
-                        }
-                    }
-
-                    // Populate the preimage for each row.
-                    for x in 0..5 {
-                        for y in 0..5 {
-                            let preimage = reg_preimage(x, y);
-                            region.assign_advice(
-                                || "preimage",
-                                self.config.cols[preimage],
-                                0,
-                                || Value::known(input[y * 5 + x]),
-                            )?;
-                            row[preimage] = input[y * 5 + x];
                         }
                     }
 
