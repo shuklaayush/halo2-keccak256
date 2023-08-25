@@ -5,9 +5,9 @@ edition = "2021"
 
 [features]
 default = ["axiom-backend", "jemallocator"]
+axiom-backend = ["halo2_proofs_axiom"]
 pse-backend = ["halo2_proofs_pse"]
 zcash-backend = ["halo2_proofs_zcash"]
-axiom-backend = ["halo2_proofs_axiom"]
 dev-graph = ["halo2_proofs_pse/dev-graph", "plotters"]
 
 [dependencies]
@@ -15,9 +15,9 @@ ff = "0.13.0"
 plotters = { version = "0.3.0", optional = true }
 tabbycat = { version = "0.1", features = ["attributes"], optional = true }
 
+halo2_proofs_axiom = { package = "halo2_proofs", git = "https://github.com/axiom-crypto/halo2.git", optional = true }
 halo2_proofs_pse = { package = "halo2_proofs", git = "https://github.com/privacy-scaling-explorations/halo2.git", optional = true }
 halo2_proofs_zcash = { package = "halo2_proofs", git = "https://github.com/zcash/halo2.git", optional = true }
-halo2_proofs_axiom = { package = "halo2_proofs", git = "https://github.com/axiom-crypto/halo2.git", optional = true }
 
 # memory allocation
 [target.'cfg(not(target_env = "msvc"))'.dependencies]

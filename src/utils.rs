@@ -5,10 +5,10 @@ use ff::Field;
 #[inline(always)]
 pub fn assign_advice<F: Field>(
     region: &mut Region<F>,
-    _annotation: impl Into<String>,
+    _annotation: &str,
     column: Column<Advice>,
     offset: usize,
-    value: Value<impl Into<Assigned<F>>>,
+    value: Value<F>,
 ) {
     #[cfg(feature = "axiom-backend")]
     {
@@ -16,6 +16,8 @@ pub fn assign_advice<F: Field>(
     }
     #[cfg(not(feature = "axiom-backend"))]
     {
-        region.assign_advice(|| _annotation, column, offset, || value);
+        region
+            .assign_advice(|| _annotation, column, offset, || value)
+            .unwrap();
     }
 }
