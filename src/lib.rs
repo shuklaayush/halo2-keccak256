@@ -10,6 +10,12 @@ use ff::PrimeFieldBits;
 use halo2_proofs_shim::{circuit::*, plonk::*, poly::Rotation};
 use std::marker::PhantomData;
 
+#[cfg(feature = "jemallocator")]
+use jemallocator::Jemalloc;
+#[cfg(feature = "jemallocator")]
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
+
 use columns::{
     reg_a, reg_a_prime, reg_a_prime_prime, reg_a_prime_prime_0_0_bit, reg_a_prime_prime_prime,
     reg_b, reg_c, reg_c_prime, reg_output, reg_step, NUM_COLUMNS,
