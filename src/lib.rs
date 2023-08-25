@@ -33,8 +33,8 @@ struct KeccakConfig {
     pub selector_output: Selector,
     pub selector_not_output: Selector,
 
-    pub instance_input: Column<Instance>,
-    pub instance_output: Column<Instance>,
+    pub _instance_input: Column<Instance>,
+    pub _instance_output: Column<Instance>,
 }
 
 #[derive(Debug, Clone)]
@@ -278,8 +278,8 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
             selector_input,
             selector_output,
             selector_not_output,
-            instance_input,
-            instance_output,
+            _instance_input: instance_input,
+            _instance_output: instance_output,
         }
     }
 
@@ -328,34 +328,24 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                             row[reg_step(i)] = val;
                         }
 
-                        if round == 0 {
-                            // Populate A for first row.
-                            for x in 0..5 {
-                                for y in 0..5 {
-                                    let a = reg_a(x, y);
-                                    region.assign_advice(
-                                        || "a",
-                                        self.config.cols[a],
-                                        0,
-                                        || Value::known(input[y * 5 + x]),
-                                    )?;
-                                    row[a] = input[y * 5 + x];
-                                }
-                            }
-                        } else {
-                            // Assign A
-                            for x in 0..5 {
-                                for y in 0..5 {
-                                    let round_input = reg_a(x, y);
-                                    let round_output = reg_a_prime_prime_prime(x, y);
-                                    region.assign_advice(
-                                        || "a",
-                                        self.config.cols[round_input],
-                                        round_offset,
-                                        || Value::known(row[round_output]),
-                                    )?;
-                                    row[round_input] = row[round_output];
-                                }
+                        // Populate A
+                        for x in 0..5 {
+                            for y in 0..5 {
+                                let a = reg_a(x, y);
+                                let val = if round == 0 {
+                                    // First round, assign input
+                                    input[y * 5 + x]
+                                } else {
+                                    // Copy output from previous round
+                                    row[reg_a_prime_prime_prime(x, y)]
+                                };
+                                region.assign_advice(
+                                    || "a",
+                                    self.config.cols[a],
+                                    round_offset, // offset
+                                    || Value::known(val),
+                                )?;
+                                row[a] = val;
                             }
                         }
 
@@ -519,13 +509,11 @@ impl<F: PrimeFieldBits> Circuit<F> for KeccakCircuit<F> {
 mod tests {
     use super::*;
 
+    use halo2_proofs_shim::dev::MockProver;
     use tiny_keccak::keccakf;
 
+    #[cfg(feature = "pse-backend")]
     use ark_std::{end_timer, start_timer};
-    use halo2_proofs_shim::dev::MockProver;
-    use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
-    use rand_core::OsRng;
-
     #[cfg(feature = "pse-backend")]
     use halo2_proofs_shim::{
         halo2curves::bn256::{Bn256, Fr, G1Affine},
@@ -541,6 +529,11 @@ mod tests {
             Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
         },
     };
+    #[cfg(feature = "pse-backend")]
+    use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
+    #[cfg(feature = "pse-backend")]
+    use rand_core::OsRng;
+
     #[cfg(feature = "zcash-backend")]
     use halo2curves::bn256::Fr;
 
@@ -587,6 +580,8 @@ mod tests {
 
         let inputs_fr = inputs.map(|input| input.map(|x| Fr::from(x)));
         let expected_fr = expected.map(|output| output.map(|x| Fr::from(x)));
+
+        println!("inputs: {:?}", inputs_fr);
 
         let circuit = KeccakCircuit {
             inputs: inputs_fr.to_vec(),
