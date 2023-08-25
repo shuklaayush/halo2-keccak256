@@ -4,9 +4,10 @@ mod columns;
 mod constants;
 mod halo2_proofs_shim;
 mod logic;
+mod utils;
 
-use crate::halo2_proofs_shim::{circuit::*, plonk::*, poly::Rotation};
 use ff::PrimeFieldBits;
+use halo2_proofs_shim::{circuit::*, plonk::*, poly::Rotation};
 use std::marker::PhantomData;
 
 use columns::{
@@ -15,7 +16,7 @@ use columns::{
 };
 use constants::{rc_value, rc_value_bit};
 use logic::{andn, andn_gen, xor, xor3_gen, xor_gen};
-// use columns::{NUM_COLUMNS};
+use utils::assign_advice;
 
 /// Number of rounds in a Keccak permutation.
 pub(crate) const NUM_ROUNDS: usize = 24;
@@ -319,12 +320,13 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                         // Assign round flags
                         for i in 0..NUM_ROUNDS {
                             let val = if i == round { F::ONE } else { F::ZERO };
-                            region.assign_advice(
-                                || "advice",
+                            assign_advice(
+                                &mut region,
+                                "advice",
                                 self.config.cols[reg_step(i)],
                                 round_offset,
-                                || Value::known(val),
-                            )?;
+                                Value::known(val),
+                            );
                             row[reg_step(i)] = val;
                         }
 
@@ -339,12 +341,13 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                                     // Copy output from previous round
                                     row[reg_a_prime_prime_prime(x, y)]
                                 };
-                                region.assign_advice(
-                                    || "a",
+                                assign_advice(
+                                    &mut region,
+                                    "a",
                                     self.config.cols[a],
                                     round_offset, // offset
-                                    || Value::known(val),
-                                )?;
+                                    Value::known(val),
+                                );
                                 row[a] = val;
                             }
                         }
@@ -360,12 +363,13 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                                         F::from(bits[z] as u64)
                                     })
                                     .collect::<Vec<_>>());
-                                region.assign_advice(
-                                    || "c",
+                                assign_advice(
+                                    &mut region,
+                                    "c",
                                     self.config.cols[reg_c(x, z)],
                                     round_offset,
-                                    || Value::known(xor),
-                                )?;
+                                    Value::known(xor),
+                                );
                                 row[reg_c(x, z)] = xor;
                             }
                         }
@@ -378,12 +382,13 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                                     row[reg_c((x + 4) % 5, z)],
                                     row[reg_c((x + 1) % 5, (z + 63) % 64)],
                                 ]);
-                                region.assign_advice(
-                                    || "c_prime",
+                                assign_advice(
+                                    &mut region,
+                                    "c_prime",
                                     self.config.cols[reg_c_prime(x, z)],
                                     round_offset,
-                                    || Value::known(xor),
-                                )?;
+                                    Value::known(xor),
+                                );
                                 row[reg_c_prime(x, z)] = xor;
                             }
                         }
@@ -398,12 +403,13 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                                     let a_bit = F::from(row[reg_a(x, y)].to_le_bits()[z] as u64);
                                     let xor =
                                         xor(&[a_bit, row[reg_c(x, z)], row[reg_c_prime(x, z)]]);
-                                    region.assign_advice(
-                                        || "a_prime",
+                                    assign_advice(
+                                        &mut region,
+                                        "a_prime",
                                         self.config.cols[reg_a_prime(x, y, z)],
                                         round_offset,
-                                        || Value::known(xor),
-                                    )?;
+                                        Value::known(xor),
+                                    );
                                     row[reg_a_prime(x, y, z)] = xor;
                                 }
                             }
@@ -427,12 +433,13 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                                     .rev()
                                     .fold(F::ZERO, |acc, z| F::from(2) * acc + get_bit(z));
 
-                                region.assign_advice(
-                                    || "a_prime_prime",
+                                assign_advice(
+                                    &mut region,
+                                    "a_prime_prime",
                                     self.config.cols[reg_a_prime_prime(x, y)],
                                     round_offset,
-                                    || Value::known(val),
-                                )?;
+                                    Value::known(val),
+                                );
                                 row[reg_a_prime_prime(x, y)] = val;
                             }
                         }
@@ -442,12 +449,13 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
 
                         for i in 0..64 {
                             let val = F::from(a_prime_prime_0_0_bits[i] as u64);
-                            region.assign_advice(
-                                || "a_prime_prime_0_0",
+                            assign_advice(
+                                &mut region,
+                                "a_prime_prime_0_0",
                                 self.config.cols[reg_a_prime_prime_0_0_bit(i)],
                                 round_offset,
-                                || Value::known(val),
-                            )?;
+                                Value::known(val),
+                            );
                             row[reg_a_prime_prime_0_0_bit(i)] = val;
                         }
 
@@ -459,12 +467,13 @@ impl<F: PrimeFieldBits> KeccakChip<F> {
                                 .fold(0u64, |acc, b| (acc << 1) + (*b as u64))
                                 ^ rc_value(round),
                         );
-                        region.assign_advice(
-                            || "a_prime_prime_prime_0_0",
+                        assign_advice(
+                            &mut region,
+                            "a_prime_prime_prime_0_0",
                             self.config.cols[reg_a_prime_prime_prime(0, 0)],
                             round_offset,
-                            || Value::known(val),
-                        )?;
+                            Value::known(val),
+                        );
                         row[reg_a_prime_prime_prime(0, 0)] = val;
                     }
                 }
@@ -512,9 +521,9 @@ mod tests {
     use halo2_proofs_shim::dev::MockProver;
     use tiny_keccak::keccakf;
 
-    #[cfg(feature = "pse-backend")]
+    #[cfg(any(feature = "pse-backend", feature = "axiom-backend"))]
     use ark_std::{end_timer, start_timer};
-    #[cfg(feature = "pse-backend")]
+    #[cfg(any(feature = "pse-backend", feature = "axiom-backend"))]
     use halo2_proofs_shim::{
         halo2curves::bn256::{Bn256, Fr, G1Affine},
         poly::{
@@ -529,9 +538,9 @@ mod tests {
             Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
         },
     };
-    #[cfg(feature = "pse-backend")]
+    #[cfg(any(feature = "pse-backend", feature = "axiom-backend"))]
     use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
-    #[cfg(feature = "pse-backend")]
+    #[cfg(any(feature = "pse-backend", feature = "axiom-backend"))]
     use rand_core::OsRng;
 
     #[cfg(feature = "zcash-backend")]
@@ -590,7 +599,7 @@ mod tests {
         prover.assert_satisfied();
     }
 
-    #[cfg(feature = "pse-backend")]
+    #[cfg(any(feature = "pse-backend", feature = "axiom-backend"))]
     #[test]
     fn test_keccak_proof() {
         let k = NUM_LANES.next_power_of_two().trailing_zeros();
@@ -673,7 +682,7 @@ mod tests {
         println!("proof_size: {} bytes", proof_size);
     }
 
-    #[cfg(feature = "pse-backend")]
+    #[cfg(any(feature = "pse-backend", feature = "axiom-backend"))]
     #[test]
     fn bench_keccak() {
         const NUM_INPUTS: usize = 85;
