@@ -30,16 +30,16 @@ RAYON_NUM_THREADS=1 sudo --preserve-env cargo flamegraph  --output profile/flame
 sudo --preserve-env cargo flamegraph  --output profile/flamegraph.svg --unit-test -- bench_keccak
 ```
 
-## Using different halo2 backends
+## Using different halo2 versions
 
 The circuit can be compiled with three different backends
 
-- [`axiom-backend`](https://github.com/axiom-crypto/halo2)
-- [`pse-backend`](https://github.com/privacy-scaling-explorations/halo2)
-- [`zcash-backend`](https://github.com/zcash/halo2)
+- [`halo2-axiom`](https://github.com/axiom-crypto/halo2)
+- [`halo2-pse`](https://github.com/privacy-scaling-explorations/halo2)
+- [`halo2-zcash`](https://github.com/zcash/halo2)
 
 Switch between each of the backends by running:
 
 ```bash
-cargo t -r --no-default-features --features zcash-backend -- --nocapture
+cargo t -r --no-default-features --features halo2-zcash -- --nocapture
 ```

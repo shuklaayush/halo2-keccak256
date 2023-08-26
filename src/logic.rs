@@ -1,4 +1,4 @@
-use crate::halo2_proofs_shim::plonk::Expression;
+use crate::halo2_proofs::plonk::Expression;
 use ff::PrimeField;
 
 pub(crate) fn xor<F: PrimeField>(xs: &[F]) -> F {

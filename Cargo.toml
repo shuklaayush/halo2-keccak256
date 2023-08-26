@@ -4,10 +4,10 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["axiom-backend", "jemallocator"]
-axiom-backend = ["halo2_proofs_axiom"]
-pse-backend = ["halo2_proofs_pse"]
-zcash-backend = ["halo2_proofs_zcash"]
+default = ["halo2-axiom", "jemallocator"]
+halo2-axiom = ["halo2_proofs_axiom"]
+halo2-pse = ["halo2_proofs_pse"]
+halo2-zcash = ["halo2_proofs_zcash"]
 dev-graph = ["halo2_proofs_pse/dev-graph", "plotters"]
 
 [dependencies]

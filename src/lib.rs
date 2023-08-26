@@ -2,12 +2,12 @@
 
 mod columns;
 mod constants;
-mod halo2_proofs_shim;
+mod halo2_proofs;
 mod logic;
 mod utils;
 
+use crate::halo2_proofs::{circuit::*, plonk::*, poly::Rotation};
 use ff::PrimeFieldBits;
-use halo2_proofs_shim::{circuit::*, plonk::*, poly::Rotation};
 use std::marker::PhantomData;
 
 #[cfg(feature = "jemallocator")]
@@ -526,15 +526,13 @@ mod tests {
 
     use tiny_keccak::keccakf;
 
-    #[cfg(feature = "zcash-backend")]
-    use halo2_proofs_shim::dev::MockProver;
-    #[cfg(feature = "zcash-backend")]
+    #[cfg(feature = "halo2-zcash")]
+    use crate::halo2_proofs::dev::MockProver;
+    #[cfg(feature = "halo2-zcash")]
     use halo2curves::bn256::Fr;
 
-    #[cfg(any(feature = "pse-backend", feature = "axiom-backend"))]
-    use ark_std::{end_timer, start_timer};
-    #[cfg(any(feature = "pse-backend", feature = "axiom-backend"))]
-    use halo2_proofs_shim::{
+    #[cfg(any(feature = "halo2-pse", feature = "halo2-axiom"))]
+    use crate::halo2_proofs::{
         halo2curves::bn256::{Bn256, Fr, G1Affine},
         poly::{
             commitment::ParamsProver,
@@ -548,12 +546,14 @@ mod tests {
             Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
         },
     };
-    #[cfg(any(feature = "pse-backend", feature = "axiom-backend"))]
+    #[cfg(any(feature = "halo2-pse", feature = "halo2-axiom"))]
+    use ark_std::{end_timer, start_timer};
+    #[cfg(any(feature = "halo2-pse", feature = "halo2-axiom"))]
     use rand_chacha::{rand_core::SeedableRng, ChaCha20Rng};
-    #[cfg(any(feature = "pse-backend", feature = "axiom-backend"))]
+    #[cfg(any(feature = "halo2-pse", feature = "halo2-axiom"))]
     use rand_core::OsRng;
 
-    #[cfg(feature = "zcash-backend")]
+    #[cfg(feature = "halo2-zcash")]
     #[test]
     fn test_keccak_correctness() {
         let k = NUM_LANES.next_power_of_two().trailing_zeros();
@@ -577,7 +577,7 @@ mod tests {
         prover.assert_satisfied();
     }
 
-    #[cfg(feature = "zcash-backend")]
+    #[cfg(feature = "halo2-zcash")]
     #[test]
     fn test_multiple_keccak_correctness() {
         const NUM_INPUTS: usize = 2;
@@ -608,7 +608,7 @@ mod tests {
         prover.assert_satisfied();
     }
 
-    #[cfg(any(feature = "pse-backend", feature = "axiom-backend"))]
+    #[cfg(any(feature = "halo2-pse", feature = "halo2-axiom"))]
     #[test]
     fn test_keccak_proof() {
         let k = NUM_LANES.next_power_of_two().trailing_zeros();
@@ -691,7 +691,7 @@ mod tests {
         println!("proof_size: {} bytes", proof_size);
     }
 
-    #[cfg(any(feature = "pse-backend", feature = "axiom-backend"))]
+    #[cfg(any(feature = "halo2-pse", feature = "halo2-axiom"))]
     #[test]
     fn bench_keccak() {
         const NUM_INPUTS: usize = 85;
@@ -779,9 +779,10 @@ mod tests {
     }
 
     // TODO: Fix this to run for all backends
-    #[cfg(all(feature = "dev-graph", feature = "pse-backend"))]
+    #[cfg(all(feature = "dev-graph", feature = "halo2-pse"))]
     #[test]
     fn plot_keccak() {
+        use crate::halo2_proofs::dev::CircuitLayout;
         use plotters::prelude::*;
 
         let root = BitMapBackend::new("keccak-layout.png", (1024, 3096)).into_drawing_area();
@@ -792,8 +793,6 @@ mod tests {
             inputs: vec![[Fr::default(); NUM_LANES]],
         };
 
-        halo2_proofs_shim::dev::CircuitLayout::default()
-            .render(5, &circuit, &root)
-            .unwrap();
+        CircuitLayout::default().render(5, &circuit, &root).unwrap();
     }
 }
