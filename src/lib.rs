@@ -16,6 +16,12 @@ use jemallocator::Jemalloc;
 #[global_allocator]
 static GLOBAL: Jemalloc = Jemalloc;
 
+#[cfg(feature = "mimalloc")]
+use mimalloc::MiMalloc;
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
+
 use columns::{
     reg_a, reg_a_prime, reg_a_prime_prime, reg_a_prime_prime_0_0_bit, reg_a_prime_prime_prime,
     reg_b, reg_c, reg_c_prime, reg_output, reg_step, NUM_COLUMNS,

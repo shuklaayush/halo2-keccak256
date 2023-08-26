@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["halo2-axiom", "jemallocator"]
+default = ["halo2-axiom"]
 halo2-axiom = ["halo2_proofs_axiom"]
 halo2-pse = ["halo2_proofs_pse"]
 halo2-zcash = ["halo2_proofs_zcash"]
@@ -22,6 +22,8 @@ halo2_proofs_zcash = { package = "halo2_proofs", git = "https://github.com/zcash
 # memory allocation
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 jemallocator = { version = "0.5", optional = true }
+
+mimalloc = { version = "0.1", default-features = false, optional = true }
 
 [dev-dependencies]
 ark-std = { version = "0.4.0", features = ["print-trace"] }
