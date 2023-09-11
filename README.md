@@ -7,13 +7,13 @@ The circuit is based on the [`keccak_stark`](https://github.com/mir-protocol/plo
 ## Usage
 
 ```bash
-cargo t -r -- --nocapture 
+cargo t -r -- --nocapture
 ```
 
 ## Benchmarking
 
 ```bash
-cargo t -r -- --nocapture bench_keccak 
+cargo t -r -- --nocapture bench_keccak
 ```
 
 ## Profiling
@@ -21,13 +21,13 @@ cargo t -r -- --nocapture bench_keccak
 ### Single-threaded:
 
 ```bash
-RAYON_NUM_THREADS=1 sudo --preserve-env cargo flamegraph  --output profile/flamegraph-single.svg --unit-test -- bench_keccak
+sudo --preserve-env cargo flamegraph --no-default-features --features halo2-pse --output profile/flamegraph-single.svg --unit-test -- bench_keccak
 ```
 
 ### Multi-threaded:
 
 ```bash
-sudo --preserve-env cargo flamegraph  --output profile/flamegraph.svg --unit-test -- bench_keccak
+sudo --preserve-env cargo flamegraph --output profile/flamegraph.svg --unit-test -- bench_keccak
 ```
 
 ## Using different halo2 versions
