@@ -532,7 +532,6 @@ mod tests {
 
     use tiny_keccak::keccakf;
 
-    #[cfg(not(feature = "halo2-axiom"))]
     use crate::halo2_proofs::dev::MockProver;
     #[cfg(feature = "halo2-zcash")]
     use halo2curves::bn256::Fr;
@@ -559,7 +558,6 @@ mod tests {
     #[cfg(any(feature = "halo2-pse", feature = "halo2-axiom"))]
     use rand_core::OsRng;
 
-    #[cfg(not(feature = "halo2-axiom"))]
     #[test]
     fn test_keccak_correctness() {
         let k = NUM_LANES.next_power_of_two().trailing_zeros();
@@ -583,7 +581,6 @@ mod tests {
         prover.assert_satisfied();
     }
 
-    #[cfg(not(feature = "halo2-axiom"))]
     #[test]
     fn test_multiple_keccak_correctness() {
         const NUM_INPUTS: usize = 2;

@@ -4,19 +4,20 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["halo2-pse", "multicore"]
+default = ["halo2-axiom", "multicore"]
 halo2-axiom = ["halo2_proofs_axiom"]
 halo2-pse = ["halo2_proofs_pse"]
 halo2-zcash = ["halo2_proofs_zcash"]
 dev-graph = ["halo2_proofs_pse/dev-graph", "plotters"]
-multicore = ["halo2_proofs_pse/multicore"]
+multicore = ["halo2_proofs_axiom/multicore"]
+# multicore = ["halo2_proofs_pse/multicore"]
 
 [dependencies]
 ff = "0.13.0"
 plotters = { version = "0.3.0", optional = true }
 tabbycat = { version = "0.1", features = ["attributes"], optional = true }
 
-halo2_proofs_axiom = { package = "halo2_proofs", git = "https://github.com/axiom-crypto/halo2.git", optional = true }
+halo2_proofs_axiom = { package = "halo2_proofs", git = "https://github.com/axiom-crypto/halo2.git", optional = true, default-features = false, features = ["batch", "circuit-params"] }
 halo2_proofs_pse = { package = "halo2_proofs", git = "https://github.com/privacy-scaling-explorations/halo2.git", optional = true, default-features = false, features = ["batch"] }
 halo2_proofs_zcash = { package = "halo2_proofs", git = "https://github.com/zcash/halo2.git", optional = true }
 
@@ -36,6 +37,10 @@ tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 
 [profile.release]
 debug = true
+
+# [patch."https://github.com/axiom-crypto/halo2"]
+# halo2_proofs_axiom = { package = "halo2_proofs", path = "../halo2/halo2_proofs" }
+# halo2_proofs_axiom = { package = "halo2_proofs", git = "https://github.com/shuklaayush/halo2.git", branch = "feat/axiom-msm-optimization" }
 
 # [patch."https://github.com/privacy-scaling-explorations/halo2"]
 # halo2_proofs_pse = { package = "halo2_proofs", path = "../halo2/halo2_proofs" }
